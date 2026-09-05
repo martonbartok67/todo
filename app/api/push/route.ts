@@ -5,7 +5,7 @@
  * Body: { endpoint, keys: { p256dh, auth }, userAgent? }
  */
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import { pushSubscriptions } from "@/drizzle/schema";
 import { eq } from "drizzle-orm";
 
@@ -22,6 +22,9 @@ export async function POST(req: NextRequest) {
     if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
       return NextResponse.json({ error: "Invalid subscription payload" }, { status: 400 });
     }
+
+    // Ensure schema exists before first write — see lib/db.ts.
+    await dbReady();
 
     await db
       .insert(pushSubscriptions)
@@ -47,6 +50,7 @@ export async function DELETE(req: NextRequest) {
     if (!endpoint) {
       return NextResponse.json({ error: "endpoint required" }, { status: 400 });
     }
+    await dbReady();
     await db
       .delete(pushSubscriptions)
       .where(eq(pushSubscriptions.endpoint, endpoint));

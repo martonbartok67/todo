@@ -9,6 +9,7 @@
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
+    "db:init": "node --env-file=.env scripts/init-db.mjs",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

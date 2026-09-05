@@ -7,6 +7,7 @@
  * Never expose this route without the secret check.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { dbReady } from "@/lib/db";
 import { runSync } from "@/lib/canvas/sync";
 
 export const runtime = "nodejs"; // needs Node APIs (fetch, crypto)
@@ -19,6 +20,11 @@ export async function POST(req: NextRequest) {
   if (!secret || auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Ensure schema is bootstrapped before any writes — first request to a
+  // fresh DB would otherwise race the background ensureSchema() and hit
+  // "no such table: courses". Safe on subsequent calls (cached promise).
+  await dbReady();
 
   const result = await runSync();
 
