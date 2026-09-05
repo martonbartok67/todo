@@ -117,33 +117,37 @@ async function ensureSchema(): Promise<void> {
 }
 
 /**
- * @libsql/client@0.6.x has a bug: every `execute()`/`batch()` call first
- * hits `GET /v1/jobs` to detect "schema database" status. If the response
- * is 200, or 400 with a non-`Invalid namespace` body, the client decides
- * the DB *is* a schema DB and then calls `waitForLastMigrationJobToFinish`,
- * which hits `GET /v1/jobs` again. Turso returns **400** for that endpoint
- * on databases where Drizzle's migrator was never run, and the call throws:
+ * Returns a fetch wrapper that intercepts @libsql/client's migration-job
+ * polling requests and returns HTTP 404 so the client skips the poller.
+ *
+ * The migration-job poller in @libsql/client checks `GET /v1/jobs` before every
+ * `execute()` and `batch()` call. Turso returns **400** for that endpoint on
+ * databases where Drizzle's migrator was never run, and the call throws:
  *   "Unexpected status code while fetching migration jobs: 400"
  *
  * We never use Drizzle's migrator — schema is bootstrapped via raw fetch in
  * `ensureSchema()`. So the migration-job poller is pure overhead that
  * breaks every query.
  *
- * Workaround: monkey-patch the HttpClient instance so
- * `getIsSchemaDatabase()` always returns `false`, which short-circuits the
- * poller inside both `execute()` and `batch()`. We leave everything else
- * (Hrana streams, transactions, executeMultiple) untouched.
+ * The client's `getIsSchemaDatabase()` already treats HTTP 404 as "not a
+ * schema database" and short-circuits to `false`, skipping
+ * `waitForLastMigrationJobToFinish()` entirely.
  *
- * The field is private (`#isSchemaDatabase`) but `getIsSchemaDatabase` is
- * a public method we can override. Tested against @libsql/client@0.6.2.
+ * Works regardless of @libsql/client version (0.6.x, 3.x, etc.).
  */
-function disableMigrationPoller(client: Client): void {
-  const c = client as unknown as {
-    getIsSchemaDatabase?: () => Promise<boolean>;
+function makePollerBypassingFetch(): typeof fetch {
+  const original = (globalThis as unknown as { fetch: typeof fetch }).fetch;
+  return (input, init) => {
+    const urlStr =
+      typeof input === "string"
+        ? input
+        : (input as URL).href ?? (input as URL).toString();
+    if (urlStr.includes("/v1/jobs")) {
+      // 404 → getIsSchemaDatabase() returns false → waitForLastMigrationJobToFinish() skipped
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }
+    return original(input, init);
   };
-  if (typeof c.getIsSchemaDatabase === "function") {
-    c.getIsSchemaDatabase = async () => false;
-  }
 }
 
 /**
@@ -168,8 +172,11 @@ export function getDb(): DrizzleDB {
     );
   }
 
-  const client = createClient({ url: url!, authToken: authToken! });
-  disableMigrationPoller(client);
+  const client = createClient({
+    url:       url!,
+    authToken: authToken!,
+    fetch:     makePollerBypassingFetch(),
+  });
   _db = drizzle(client, { schema });
 
   // Kick off schema bootstrap in the background. We don't `await` it here
