@@ -1,4 +1,46 @@
-import { createClient, type Client } from "@libsql/client";
+/**
+ * @libsql/client@0.6.x (the version currently installed) has a known bug:
+ * every execute()/batch() call first calls getIsSchemaDatabase() via a
+ * global fetch to GET /v1/jobs. Turso returns 400 for that endpoint on
+ * databases that aren't running the Drizzle migration system, and the
+ * client's error handler throws:
+ *   "Unexpected status code while fetching migration jobs: 400"
+ *
+ * We intercept ALL global fetch calls BEFORE @libsql/client code runs (so that
+ * migrations.js captures our patched fetch when it imports it at the top level)
+ * and return HTTP 404 for any /v1/jobs request. The client treats 404 as
+ * "not a schema database" → returns false → skips waitForLastMigrationJobToFinish().
+ *
+ * This works on any @libsql/client version because the migration checks always
+ * go through the global fetch, not the custom fetch passed to createClient().
+ */
+(function patchGlobalFetch() {
+  if ((globalThis as typeof globalThis & { __pollerBypassInstalled?: boolean }).__pollerBypassInstalled) return;
+  (globalThis as typeof globalThis & { __pollerBypassInstalled: boolean }).__pollerBypassInstalled = true;
+
+  const original = globalThis.fetch.bind(globalThis) as typeof fetch;
+
+  globalThis.fetch = ((input, init) => {
+    let urlStr: string;
+    if (typeof input === "string") {
+      urlStr = input;
+    } else if (input instanceof URL) {
+      urlStr = input.href;
+    } else {
+      // Request object — extract url property
+      urlStr = (input as Request).url;
+    }
+
+    // 404 → getIsSchemaDatabase() returns false → poller skipped
+    if (urlStr.includes("/v1/jobs")) {
+      return Promise.resolve(new Response(null, { status: 404 }));
+    }
+
+    return original(input, init);
+  }) as typeof fetch;
+})();
+
+import { createClient } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
 import * as schema from "@/drizzle/schema";
 
@@ -10,9 +52,6 @@ let _initPromise: Promise<void> | null = null;
  * Schema bootstrap statements — idempotent. Mirrors scripts/init-db.mjs
  * so the app can self-heal a fresh / wiped Turso DB without a separate
  * `npm run db:init` step.
- *
- * IMPORTANT: see `disableMigrationPoller()` for why we don't use
- * `@libsql/client.execute()` for any DB call.
  */
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS courses (
@@ -73,7 +112,7 @@ const SCHEMA_STATEMENTS = [
 
 /**
  * Send one statement to Turso via the HTTP pipeline API (bypassing
- * @libsql/client's migration-job poller).
+ * @libsql/client's migration-job poller, which runs via global fetch).
  */
 async function executeRaw(baseHttps: string, authToken: string, sql: string): Promise<void> {
   const res = await fetch(`${baseHttps}/v2/pipeline`, {
@@ -117,40 +156,6 @@ async function ensureSchema(): Promise<void> {
 }
 
 /**
- * Returns a fetch wrapper that intercepts @libsql/client's migration-job
- * polling requests and returns HTTP 404 so the client skips the poller.
- *
- * The migration-job poller in @libsql/client checks `GET /v1/jobs` before every
- * `execute()` and `batch()` call. Turso returns **400** for that endpoint on
- * databases where Drizzle's migrator was never run, and the call throws:
- *   "Unexpected status code while fetching migration jobs: 400"
- *
- * We never use Drizzle's migrator — schema is bootstrapped via raw fetch in
- * `ensureSchema()`. So the migration-job poller is pure overhead that
- * breaks every query.
- *
- * The client's `getIsSchemaDatabase()` already treats HTTP 404 as "not a
- * schema database" and short-circuits to `false`, skipping
- * `waitForLastMigrationJobToFinish()` entirely.
- *
- * Works regardless of @libsql/client version (0.6.x, 3.x, etc.).
- */
-function makePollerBypassingFetch(): typeof fetch {
-  const original = (globalThis as unknown as { fetch: typeof fetch }).fetch;
-  return (input, init) => {
-    const urlStr =
-      typeof input === "string"
-        ? input
-        : (input as URL).href ?? (input as URL).toString();
-    if (urlStr.includes("/v1/jobs")) {
-      // 404 → getIsSchemaDatabase() returns false → waitForLastMigrationJobToFinish() skipped
-      return Promise.resolve(new Response(null, { status: 404 }));
-    }
-    return original(input, init);
-  };
-}
-
-/**
  * Lazily create the Drizzle client. Throws a clear, readable error if env
  * vars are missing, instead of failing with an opaque "Invalid URL" deep
  * inside the libSQL client when `createClient` is called.
@@ -172,17 +177,8 @@ export function getDb(): DrizzleDB {
     );
   }
 
-  const client = createClient({
-    url:       url!,
-    authToken: authToken!,
-    fetch:     makePollerBypassingFetch(),
-  });
+  const client = createClient({ url: url!, authToken: authToken! });
   _db = drizzle(client, { schema });
-
-  // Bootstrap is handled by the `db` proxy below — every query waits for the
-  // schema to exist via `dbReady()` before executing. No background kick-off
-  // here; that would introduce a race where queries start before `ensureSchema`
-  // finishes on a fresh DB.
 
   return _db;
 }
@@ -205,7 +201,6 @@ export async function dbReady(): Promise<DrizzleDB> {
       _initPromise = null; // allow retry
       throw err;           // surface to caller
     }).finally(() => {
-      // Reset after settle so the next call can re-enter cleanly.
       _initPromise = null;
     }) as Promise<void>;
     await p; // await original, not the wrapped one
@@ -229,3 +224,5 @@ export const db = new Proxy({} as DrizzleDB, {
     return typeof val === "function" ? (val as Function).bind(real) : val;
   },
 }) as DrizzleDB;
+/ /   v 2   -   g l o b a l T h i s . f e t c h   b y p a s s   f i x  
+ 
