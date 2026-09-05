@@ -179,14 +179,10 @@ export function getDb(): DrizzleDB {
   });
   _db = drizzle(client, { schema });
 
-  // Kick off schema bootstrap in the background. We don't `await` it here
-  // because `getDb()` is called from many places that can't tolerate a slow
-  // first call — but we *do* await it below via `dbReady()` for endpoints
-  // that need the schema to exist (e.g. /api/sync).
-  _initPromise ??= ensureSchema().catch((err) => {
-    _initPromise = null; // allow retry on next request
-    throw err;
-  });
+  // Bootstrap is handled by the `db` proxy below — every query waits for the
+  // schema to exist via `dbReady()` before executing. No background kick-off
+  // here; that would introduce a race where queries start before `ensureSchema`
+  // finishes on a fresh DB.
 
   return _db;
 }
@@ -196,23 +192,39 @@ export function getDb(): DrizzleDB {
  * bootstrapped (idempotent CREATE IF NOT EXISTS). Call this from any code
  * path that requires the tables to exist before issuing queries — most
  * importantly from `/api/sync` and `/api/push`, which would otherwise
- * race against the background init and hit "no such table".
+ * hit "no such table".
  */
 export async function dbReady(): Promise<DrizzleDB> {
-  const db = getDb();
-  if (_initPromise) {
+  const database = getDb();
+
+  // Capture the in-flight promise so we can reset `_initPromise` without
+  // losing the reference we need to await.
+  if (!_initPromise) {
+    const p = ensureSchema();
+    _initPromise = p.catch((err) => {
+      _initPromise = null; // allow retry
+      throw err;           // surface to caller
+    }).finally(() => {
+      // Reset after settle so the next call can re-enter cleanly.
+      _initPromise = null;
+    }) as Promise<void>;
+    await p; // await original, not the wrapped one
+  } else {
     await _initPromise;
   }
-  return db;
+
+  return database;
 }
 
 /**
- * Lazy proxy over the Drizzle client. Defers connection until first use
- * and binds each method so Drizzle's internal `this`-chaining works.
+ * Lazy proxy over the Drizzle client. Defers connection until first use.
+ * Every property access awaits `dbReady()` first, guaranteeing the schema
+ * exists before any query runs. Methods are bound so Drizzle's internal
+ * `this`-chaining works.
  */
 export const db = new Proxy({} as DrizzleDB, {
-  get(_target, prop) {
-    const real = getDb() as unknown as Record<PropertyKey, unknown>;
+  async get(_target, prop) {
+    const real = await dbReady() as unknown as Record<PropertyKey, unknown>;
     const val  = real[prop];
     return typeof val === "function" ? (val as Function).bind(real) : val;
   },
