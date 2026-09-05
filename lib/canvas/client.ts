@@ -4,9 +4,33 @@
  * The bearer token is NEVER sent to the client.
  */
 
-const BASE_URL    = process.env.CANVAS_BASE_URL!;
-const BEARER      = process.env.CANVAS_BEARER_TOKEN!;
 const MAX_RETRIES = 3;
+
+type CanvasConfig = { baseUrl: string; bearer: string };
+
+/**
+ * Read Canvas env vars at request time and throw a clear error if any are
+ * missing. Doing this lazily (instead of at module load) means a misconfigured
+ * deployment produces a readable 500 message, not an opaque "Invalid URL"
+ * thrown from deep inside `new URL()`.
+ */
+function getCanvasConfig(): CanvasConfig {
+  const baseUrl = process.env.CANVAS_BASE_URL;
+  const bearer  = process.env.CANVAS_BEARER_TOKEN;
+  const missing = [
+    !baseUrl && "CANVAS_BASE_URL",
+    !bearer  && "CANVAS_BEARER_TOKEN",
+  ].filter(Boolean) as string[];
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Canvas sync unavailable: missing env var(s): ${missing.join(", ")}. ` +
+      `Add them in Vercel → Settings → Environment Variables, then redeploy.`
+    );
+  }
+
+  return { baseUrl: baseUrl!, bearer: bearer! };
+}
 
 type FetchOptions = { params?: Record<string, string> };
 
@@ -20,8 +44,9 @@ export function parseNextLink(linkHeader: string | null): string | null {
 
 /** Single authenticated GET with retry on 429/5xx. */
 async function canvasFetch(url: string, attempt = 1): Promise<Response> {
+  const { bearer } = getCanvasConfig();
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${BEARER}` },
+    headers: { Authorization: `Bearer ${bearer}` },
     next: { revalidate: 0 }, // never cache — always fresh
   });
 
@@ -40,7 +65,8 @@ async function canvasFetch(url: string, attempt = 1): Promise<Response> {
 
 /** Build a Canvas API URL with query params. */
 function buildUrl(path: string, params?: Record<string, string>): string {
-  const url = new URL(`${BASE_URL}/api/v1${path}`);
+  const { baseUrl } = getCanvasConfig();
+  const url = new URL(`${baseUrl}/api/v1${path}`);
   url.searchParams.set("per_page", "100"); // max Canvas allows
   if (params) {
     for (const [k, v] of Object.entries(params)) {
