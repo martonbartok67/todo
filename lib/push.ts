@@ -1,11 +1,11 @@
 /**
  * Server-side Web Push sender.
- * Called by notification jobs to dispatch OS-level push notifications.
  * Skeleton ready — full dispatch logic in Step 5.
  */
 import webpush from "web-push";
 import { db } from "@/lib/db";
 import { pushSubscriptions } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 webpush.setVapidDetails(
   process.env.VAPID_SUBJECT!,
@@ -30,11 +30,14 @@ export async function broadcastPush(payload: PushPayload): Promise<void> {
     subs.map(async (sub) => {
       try {
         await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dhKey, auth: sub.authKey } },
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dhKey, auth: sub.authKey },
+          },
           JSON.stringify(payload)
         );
       } catch (err: unknown) {
-        // 410 = subscription expired; clean it up
+        // 410 = subscription expired; remove it
         if (
           err &&
           typeof err === "object" &&
@@ -43,7 +46,7 @@ export async function broadcastPush(payload: PushPayload): Promise<void> {
         ) {
           await db
             .delete(pushSubscriptions)
-            .where(({ endpoint: pushSubscriptions.endpoint }) => pushSubscriptions.endpoint === sub.endpoint);
+            .where(eq(pushSubscriptions.endpoint, sub.endpoint));
         }
       }
     })
