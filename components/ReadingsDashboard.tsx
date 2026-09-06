@@ -12,24 +12,17 @@ type CourseGroup = {
 
 function groupReadings(items: ReadingItem[]): CourseGroup[] {
   const courseMap = new Map<string, CourseGroup>();
-
   for (const item of items) {
     if (!courseMap.has(item.courseCanvasId)) {
       courseMap.set(item.courseCanvasId, {
-        courseName:     item.courseName,
-        courseCanvasId: item.courseCanvasId,
-        lectures:       [],
+        courseName: item.courseName, courseCanvasId: item.courseCanvasId, lectures: [],
       });
     }
     const course = courseMap.get(item.courseCanvasId)!;
-    let lecture   = course.lectures.find((l) => l.label === item.lectureLabel);
-    if (!lecture) {
-      lecture = { label: item.lectureLabel, items: [] };
-      course.lectures.push(lecture);
-    }
+    let lecture  = course.lectures.find((l) => l.label === item.lectureLabel);
+    if (!lecture) { lecture = { label: item.lectureLabel, items: [] }; course.lectures.push(lecture); }
     lecture.items.push(item);
   }
-
   return Array.from(courseMap.values());
 }
 
@@ -40,19 +33,18 @@ function fallbackColor(name: string): string {
   return colors[Math.abs(h)];
 }
 
-export default function ReadingsDashboard({ items }: { items: ReadingItem[] }) {
+export default function ReadingsDashboard({
+  items, tableReady,
+}: {
+  items: ReadingItem[];
+  tableReady: boolean;
+}) {
   const [isPending, startTransition] = useTransition();
-  const groups = groupReadings(items);
-
-  function handleComplete(id: number) {
-    startTransition(() => { completeReading(id); });
-  }
-  function handleUncomplete(id: number) {
-    startTransition(() => { uncompleteReading(id); });
-  }
-
-  const total     = items.length;
+  const groups    = groupReadings(items);
   const doneCount = items.filter((i) => i.completedAt).length;
+
+  function handleComplete(id: number)   { startTransition(() => { completeReading(id); }); }
+  function handleUncomplete(id: number) { startTransition(() => { uncompleteReading(id); }); }
 
   return (
     <>
@@ -60,38 +52,50 @@ export default function ReadingsDashboard({ items }: { items: ReadingItem[] }) {
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Readings</h1>
           <p className="text-xs text-[#6b7280] mt-0.5">
-            {doneCount}/{total} complete · AI-extracted from course manuals
+            {items.length > 0
+              ? `${doneCount}/${items.length} complete · AI-extracted from course manuals`
+              : "AI-extracted from course manuals"}
           </p>
         </div>
-        <a href="/" className="text-[11px] text-[#6b7280] hover:text-white transition-colors border border-[#2a2a3a] rounded-lg px-2.5 py-1">
+        <a href="/"
+          className="text-[11px] text-[#6b7280] hover:text-white transition-colors border border-[#2a2a3a] rounded-lg px-2.5 py-1">
           ← Tasks
         </a>
       </header>
 
-      {items.length === 0 && (
-        <div className="text-center py-16 text-[#6b7280] text-sm">
-          No readings extracted yet. Trigger a sync after adding{" "}
-          <span className="text-white">ANTHROPIC_API_KEY</span> to your env vars.
+      {/* Table not ready */}
+      {!tableReady && (
+        <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-5 text-sm text-[#6b7280]">
+          <p className="text-white font-medium mb-1">Database table missing</p>
+          <p>Run <code className="text-[#6366f1]">npx drizzle-kit push</code> locally to create the <code className="text-[#6366f1]">reading_items</code> table, then trigger a sync.</p>
         </div>
       )}
 
+      {/* Empty — table exists but no readings yet */}
+      {tableReady && items.length === 0 && (
+        <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-5 text-sm text-[#6b7280]">
+          <p className="text-white font-medium mb-1">No readings extracted yet</p>
+          <p>Make sure <code className="text-[#6366f1]">GROQ_API_KEY</code> is set in Vercel env vars, then trigger a manual sync.</p>
+          <p className="mt-2 text-[11px]">Readings are only extracted from Canvas pages whose title or content contains keywords like "syllabus", "reading list", "course manual", or "studiemateriaal".</p>
+        </div>
+      )}
+
+      {/* Readings list */}
       {groups.map((course) => {
-        const accent    = fallbackColor(course.courseName);
-        const courseDone = course.lectures.flatMap((l) => l.items).filter((i) => i.completedAt).length;
+        const accent      = fallbackColor(course.courseName);
+        const courseDone  = course.lectures.flatMap((l) => l.items).filter((i) => i.completedAt).length;
         const courseTotal = course.lectures.flatMap((l) => l.items).length;
 
         return (
           <section key={course.courseCanvasId} className="mb-7">
-            {/* Course header */}
             <div className="flex items-center gap-2 mb-3">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: accent }} />
-              <p className="text-[11px] font-medium uppercase tracking-widest text-[#6b7280] flex-1">
+              <p className="text-[11px] font-medium uppercase tracking-widest text-[#6b7280] flex-1 truncate">
                 {course.courseName}
               </p>
-              <span className="text-[11px] text-[#374151]">{courseDone}/{courseTotal}</span>
+              <span className="text-[11px] text-[#374151] shrink-0">{courseDone}/{courseTotal}</span>
             </div>
 
-            {/* Lectures */}
             {course.lectures.map((lecture) => (
               <div key={lecture.label} className="mb-4">
                 <p className="text-[11px] text-[#6366f1] font-medium uppercase tracking-widest mb-1.5 ml-1">
