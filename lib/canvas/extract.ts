@@ -1,18 +1,23 @@
 /**
- * AI-powered extraction of reading lists from Canvas page HTML.
- * Uses Groq API (llama-3.3-70b-versatile) — fast and free-tier friendly.
+ * AI-powered extraction of reading lists from Canvas course pages.
+ * Handles EUR/Erasmus-style schedules: week tables, module lists, chapter refs.
  */
 
 export type ExtractedReading = {
-  lectureLabel: string;
-  readingText:  string;
-  detail:       string | null;
+  lectureLabel: string;  // e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
+  readingText:  string;  // e.g. "Chapters 1 & 3" or "Chapter 5"
+  detail:       string | null;  // topic/title if available
 };
 
+// Broad keyword set — matches schedules, module overviews, and course manuals
 const SYLLABUS_KEYWORDS = [
-  "syllabus","course manual","reading list","literature","schedule",
-  "weekly plan","lecture plan","course guide","studiemateriaal",
-  "literature list","compulsory reading","required reading",
+  "syllabus","course manual","reading list","literature","studiemateriaal",
+  "compulsory reading","required reading","weekly plan","lecture plan",
+  // Schedule/table patterns common at EUR
+  "lecture 1","lecture 2","week 36","week 37","week 38","week 39","week 40",
+  "module 1","module 2","module 3","preparation","chapter","chapters",
+  "session overview","block 1","block 2","schedule","programme",
+  "wk36","wk37","wk38","wk39","wk40","wk41",
 ];
 
 export function looksLikeSyllabus(title: string, bodySnippet: string): boolean {
@@ -20,14 +25,21 @@ export function looksLikeSyllabus(title: string, bodySnippet: string): boolean {
   return SYLLABUS_KEYWORDS.some((kw) => haystack.includes(kw));
 }
 
+// Always attempt extraction on ALL pages during first sync
+// so we don't miss manuals with unusual titles.
+// After extraction, only non-empty results are stored.
+export const EXTRACT_ALL_PAGES = true;
+
 function prepareText(html: string): string {
   return html
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 6000);
+    .slice(0, 8000);
 }
 
 export async function extractReadings(
@@ -36,9 +48,9 @@ export async function extractReadings(
   courseName: string,
 ): Promise<ExtractedReading[]> {
   const text = prepareText(pageHtml);
-  if (!text) return [];
+  if (text.length < 50) return [];
 
-  const prompt = `You are extracting a structured reading list from a university course document.
+  const prompt = `You are extracting a structured reading/preparation list from a university course page.
 
 Course: ${courseName}
 Page title: ${pageTitle}
@@ -46,14 +58,25 @@ Page title: ${pageTitle}
 Document text:
 ${text}
 
-Extract every required/compulsory reading grouped by lecture, week, or session.
-Return ONLY a JSON array. Each element must have exactly these keys:
-- "lectureLabel": string — e.g. "Week 1" or "Lecture 3 — Supply & Demand"
-- "readingText": string — author, year, title, chapter. E.g. "Smith (2019) Ch. 4"
-- "detail": string or null — page range, URL, or extra note if present, else null
+This may be a lecture schedule, module overview, or course manual. It may use:
+- Week numbers (e.g. "Week 36", "wk36") with lecture topics and chapter references
+- Module numbers (e.g. "Module 1 - Introduction (wk36)") with chapter numbers
+- Simple chapter references like "Chapters 1 & 3" or "Chapter 6"
+- Topics like "What is OB? Introduction" paired with preparation material
 
-If no structured reading list is found, return [].
-Return only the JSON array, no other text, no markdown fences.`;
+Extract every lecture/module/session that has associated reading or preparation material.
+
+Return ONLY a JSON array. Each element must have exactly these keys:
+- "lectureLabel": string — combine week+lecture info, e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
+- "readingText": string — the chapter/reading reference, e.g. "Chapters 1 & 3" or "Chapter 5 — Cultural Frameworks"
+- "detail": string or null — the lecture topic or extra note, e.g. "What is OB? Introduction to the field"
+
+Rules:
+- One entry per lecture/module per reading reference
+- If a module lists multiple chapters, create one entry per chapter
+- If there is no reading for a session, skip it
+- If the page contains no structured reading/preparation content at all, return []
+- Return only the JSON array, no markdown, no explanation`;
 
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -64,19 +87,22 @@ Return only the JSON array, no other text, no markdown fences.`;
       },
       body: JSON.stringify({
         model:       "llama-3.3-70b-versatile",
-        max_tokens:  1024,
+        max_tokens:  2048,
         temperature: 0,
         messages: [
           {
             role:    "system",
-            content: "You are a precise data extractor. Return only valid JSON arrays, no prose.",
+            content: "You are a precise data extractor. Output only valid JSON arrays, no prose, no markdown.",
           },
           { role: "user", content: prompt },
         ],
       }),
     });
 
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.error("Groq API error:", res.status, await res.text());
+      return [];
+    }
 
     const data = await res.json() as {
       choices: { message: { content: string } }[];
@@ -84,9 +110,15 @@ Return only the JSON array, no other text, no markdown fences.`;
 
     const raw     = data.choices?.[0]?.message?.content ?? "[]";
     const cleaned = raw.replace(/```json|```/g, "").trim();
-    const parsed  = JSON.parse(cleaned) as ExtractedReading[];
+
+    // Find the JSON array even if there's surrounding text
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+
+    const parsed = JSON.parse(match[0]) as ExtractedReading[];
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (err) {
+    console.error("extractReadings error:", err);
     return [];
   }
 }
