@@ -1,53 +1,22 @@
-# Canvas LMS sync cron.
-#
-# Runs daily at 07:00 UTC. Because GitHub Actions is the caller (not Vercel
-# Hobby's 10s serverless ceiling), the endpoint can take as long as it needs
-# to complete AI reading extraction in a single pass.
-#
-# Public repo = unlimited free Actions minutes, so this costs nothing.
-#
-# Required repo secret (Settings → Secrets and variables → Actions):
-#   CRON_SECRET  — must match the value in the Vercel project's env vars
-#
-# Manual trigger: Actions tab → "Canvas sync" → Run workflow
-name: Canvas sync
+name: Canvas Sync
 
 on:
   schedule:
-    # Daily at 07:00 UTC. Edit here if you want a different cadence; cron
-    # syntax is the standard 5-field form. Examples:
-    #   "0 7 * * *"     every day at 07:00 UTC
-    #   "0 */6 * * *"   every 6 hours
-    #   "0 7 * * 1-5"   weekdays only at 07:00 UTC
-    - cron: "0 7 * * *"
-  workflow_dispatch: # allow ad-hoc runs from the Actions UI
-    inputs:
-      url:
-        description: "Override /api/sync base URL (default: production)"
-        required: false
-        default: "https://todo-psi-drab-60.vercel.app"
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # generous — sync usually finishes in <2 min
+    timeout-minutes: 15
     steps:
-      - name: Trigger /api/sync
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          BASE_URL:    ${{ github.event.inputs.url || 'https://todo-psi-drab-60.vercel.app' }}
+      - name: Trigger sync
         run: |
-          set -euo pipefail
-          echo "POST $BASE_URL/api/sync"
-          response=$(curl -fsS -X POST \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -H "CRON-TRIGGERED-BY: github-actions" \
-            -w "\nHTTP_STATUS:%{http_code}\nTOTAL_TIME:%{time_total}s\n" \
-            "$BASE_URL/api/sync")
-          echo "$response"
-          # Surface a clean status line in the Actions log for quick scanning.
-          status=$(echo "$response" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
-          if [ "$status" != "200" ]; then
-            echo "::error::Sync failed with HTTP $status"
-            exit 1
-          fi
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/sync")
+          code=$(echo "$response" | tail -n 1)
+          body=$(echo "$response" | head -n -1)
+          echo "Status: $code"
+          echo "Body: $body"
+          [ "$code" = "200" ] || exit 1
