@@ -118,7 +118,7 @@ export async function runSync(): Promise<SyncResult> {
       tasksUpserted += newTasks.length;
 
       // AI extraction — only on syllabus-like pages
-      for (const [pageUrl, page] of pageMap.entries()) {
+      for (const [pageUrl, page] of Array.from(pageMap.entries())) {
         const body = page.body ?? "";
         if (!looksLikeSyllabus(page.title, body)) continue;
 
