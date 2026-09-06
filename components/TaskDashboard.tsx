@@ -2,16 +2,17 @@
 import { useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { completeTask, uncompleteTask } from "@/app/actions/tasks";
-import type { EnrichedTask } from "@/lib/tasks";
+import type { EnrichedTask, CourseGroup, UrgencyLevel } from "@/lib/tasks";
 import type { SyncLog } from "@/drizzle/schema";
 
 type Props = {
   pending:   EnrichedTask[];
+  byCourse:  CourseGroup[];
   completed: EnrichedTask[];
   lastSync:  SyncLog | null;
 };
 
-const URGENCY_DOT: Record<string, string> = {
+const URGENCY_DOT: Record<UrgencyLevel, string> = {
   critical: "bg-[#ef4444]",
   high:     "bg-[#f97316]",
   medium:   "bg-[#eab308]",
@@ -19,7 +20,7 @@ const URGENCY_DOT: Record<string, string> = {
   none:     "bg-[#374151]",
 };
 
-const URGENCY_RING: Record<string, string> = {
+const URGENCY_RING: Record<UrgencyLevel, string> = {
   critical: "hover:border-[#ef4444]",
   high:     "hover:border-[#f97316]",
   medium:   "hover:border-[#eab308]",
@@ -27,7 +28,7 @@ const URGENCY_RING: Record<string, string> = {
   none:     "hover:border-[#6366f1]",
 };
 
-const SECTION_LABELS: Record<string, { label: string; color: string }> = {
+const URGENCY_SECTION: Record<UrgencyLevel, { label: string; color: string }> = {
   critical: { label: "Overdue / Due < 24h", color: "text-[#ef4444]" },
   high:     { label: "Due within 48h",      color: "text-[#f97316]" },
   medium:   { label: "This week",           color: "text-[#eab308]" },
@@ -35,12 +36,17 @@ const SECTION_LABELS: Record<string, { label: string; color: string }> = {
   none:     { label: "No due date",         color: "text-[#6b7280]" },
 };
 
-function formatDue(dueAt: string): string {
+// Deterministic accent from course name if user hasn't set one
+function fallbackColor(name: string): string {
+  const colors = ["#6366f1","#8b5cf6","#06b6d4","#10b981","#f59e0b","#ef4444"];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % colors.length;
+  return colors[Math.abs(h)];
+}
+
+function formatDue(dueAt: string) {
   return new Date(dueAt).toLocaleDateString("en-NL", {
-    month:  "short",
-    day:    "numeric",
-    hour:   "2-digit",
-    minute: "2-digit",
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
 
@@ -48,104 +54,79 @@ function TaskCard({
   task,
   onComplete,
   onUncomplete,
-  isPending,
+  disabled,
 }: {
-  task:        EnrichedTask;
-  onComplete?: (id: number) => void;
+  task:          EnrichedTask;
+  onComplete?:   (id: number) => void;
   onUncomplete?: (id: number) => void;
-  isPending:   boolean;
+  disabled:      boolean;
 }) {
+  const done = !!task.completedAt;
   return (
     <motion.li
       layout
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -24 }}
-      transition={{ duration: 0.18 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ duration: 0.16 }}
       className="flex items-start gap-3 rounded-xl bg-[#111118] border border-[#2a2a3a] px-3 py-2.5 group"
     >
-      {/* Complete / undo button */}
       <button
-        disabled={isPending}
-        onClick={() =>
-          task.completedAt
-            ? onUncomplete?.(task.id)
-            : onComplete?.(task.id)
-        }
+        disabled={disabled}
+        onClick={() => done ? onUncomplete?.(task.id) : onComplete?.(task.id)}
         className={[
-          "mt-0.5 shrink-0 w-5 h-5 rounded-full border border-[#2a2a3a] transition-all",
-          task.completedAt
-            ? "bg-[#6366f1] border-[#6366f1]"
-            : URGENCY_RING[task.urgency],
-          isPending ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+          "mt-0.5 shrink-0 w-5 h-5 rounded-full border border-[#2a2a3a] transition-all flex items-center justify-center",
+          done ? "bg-[#6366f1] border-[#6366f1]" : URGENCY_RING[task.urgency],
+          disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
         ].join(" ")}
-        aria-label={task.completedAt ? "Mark incomplete" : "Mark complete"}
+        aria-label={done ? "Mark incomplete" : "Mark complete"}
       >
-        {task.completedAt && (
-          <span className="flex items-center justify-center w-full h-full text-[10px] text-white">✓</span>
-        )}
+        {done && <span className="text-[10px] text-white leading-none">✓</span>}
       </button>
 
-      {/* Content */}
       <div className="flex-1 min-w-0">
-        <p className={[
-          "text-sm font-medium leading-snug truncate",
-          task.completedAt ? "line-through text-[#6b7280]" : "",
-        ].join(" ")}>
+        <p className={["text-sm font-medium leading-snug truncate", done ? "line-through text-[#6b7280]" : ""].join(" ")}>
           {task.title}
         </p>
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-          <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${URGENCY_DOT[task.urgency]}`} />
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${URGENCY_DOT[task.urgency]}`} />
           <span className="text-[11px] text-[#6b7280] truncate">{task.courseName}</span>
-          {task.dueAt && !task.completedAt && (
-            <span className="text-[11px] text-[#6b7280] ml-auto shrink-0">
-              {formatDue(task.dueAt)}
-            </span>
+          {task.dueAt && !done && (
+            <span className="text-[11px] text-[#6b7280] ml-auto shrink-0">{formatDue(task.dueAt)}</span>
           )}
-          {task.completedAt && (
-            <span className="text-[11px] text-[#6b7280] ml-auto shrink-0">
-              Done {formatDue(task.completedAt)}
-            </span>
+          {done && task.completedAt && (
+            <span className="text-[11px] text-[#6b7280] ml-auto shrink-0">Done {formatDue(task.completedAt)}</span>
           )}
         </div>
       </div>
 
-      {/* Canvas link */}
       {task.url && (
-        <a
-          href={task.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-[#6b7280] hover:text-white transition-colors mt-0.5 text-xs"
-          aria-label="Open in Canvas"
-        >↗</a>
+        <a href={task.url} target="_blank" rel="noopener noreferrer"
+          className="shrink-0 text-[#6b7280] hover:text-white transition-colors mt-0.5 text-xs">↗</a>
       )}
     </motion.li>
   );
 }
 
-export default function TaskDashboard({ pending, completed, lastSync }: Props) {
+type ViewMode = "urgency" | "course";
+
+export default function TaskDashboard({ pending, byCourse, completed, lastSync }: Props) {
   const [isPending, startTransition] = useTransition();
+  const [view, setView]              = useState<ViewMode>("urgency");
   const [showCompleted, setShowCompleted] = useState(false);
 
-  function handleComplete(id: number) {
-    startTransition(() => { completeTask(id); });
-  }
+  function handleComplete(id: number)   { startTransition(() => { completeTask(id); }); }
+  function handleUncomplete(id: number) { startTransition(() => { uncompleteTask(id); }); }
 
-  function handleUncomplete(id: number) {
-    startTransition(() => { uncompleteTask(id); });
-  }
-
-  // Group pending by urgency in display order
-  const urgencyOrder = ["critical", "high", "medium", "low", "none"] as const;
-  const groups = urgencyOrder
+  const urgencyOrder: UrgencyLevel[] = ["critical", "high", "medium", "low", "none"];
+  const urgencyGroups = urgencyOrder
     .map((u) => ({ urgency: u, tasks: pending.filter((t) => t.urgency === u) }))
     .filter((g) => g.tasks.length > 0);
 
   return (
     <>
       {/* Header */}
-      <header className="flex items-center justify-between mb-6">
+      <header className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Tasks</h1>
           {lastSync && (
@@ -154,45 +135,76 @@ export default function TaskDashboard({ pending, completed, lastSync }: Props) {
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 text-xs text-[#6b7280]">
-          <span>{pending.length} pending</span>
-          {completed.length > 0 && (
-            <span className="text-[#6366f1]">· {completed.length} done</span>
-          )}
+        <div className="flex items-center gap-1 text-xs">
+          <span className="text-[#6b7280] mr-2">{pending.length} pending</span>
+          {(["urgency","course"] as ViewMode[]).map((v) => (
+            <button key={v}
+              onClick={() => setView(v)}
+              className={[
+                "px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors",
+                view === v
+                  ? "bg-[#6366f1] border-[#6366f1] text-white"
+                  : "bg-[#111118] border-[#2a2a3a] text-[#6b7280] hover:text-white",
+              ].join(" ")}
+            >
+              {v === "urgency" ? "Priority" : "Subject"}
+            </button>
+          ))}
         </div>
       </header>
 
-      {/* Empty state */}
       {pending.length === 0 && (
-        <div className="text-center py-16 text-[#6b7280] text-sm">
-          No pending tasks.
-        </div>
+        <div className="text-center py-16 text-[#6b7280] text-sm">No pending tasks.</div>
       )}
 
-      {/* Pending — grouped by urgency */}
-      <AnimatePresence mode="popLayout">
-        {groups.map(({ urgency, tasks }) => (
-          <motion.section key={urgency} layout className="mb-5">
-            <p className={`text-[11px] font-medium uppercase tracking-widest mb-2 ${SECTION_LABELS[urgency].color}`}>
-              {SECTION_LABELS[urgency].label}
-            </p>
-            <ul className="space-y-1.5">
-              <AnimatePresence mode="popLayout">
-                {tasks.map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    onComplete={handleComplete}
-                    isPending={isPending}
-                  />
-                ))}
-              </AnimatePresence>
-            </ul>
-          </motion.section>
-        ))}
-      </AnimatePresence>
+      {/* ── Priority view ── */}
+      {view === "urgency" && (
+        <AnimatePresence mode="popLayout">
+          {urgencyGroups.map(({ urgency, tasks }) => (
+            <motion.section key={urgency} layout className="mb-5">
+              <p className={`text-[11px] font-medium uppercase tracking-widest mb-2 ${URGENCY_SECTION[urgency].color}`}>
+                {URGENCY_SECTION[urgency].label}
+              </p>
+              <ul className="space-y-1.5">
+                <AnimatePresence mode="popLayout">
+                  {tasks.map((task) => (
+                    <TaskCard key={task.id} task={task} onComplete={handleComplete} disabled={isPending} />
+                  ))}
+                </AnimatePresence>
+              </ul>
+            </motion.section>
+          ))}
+        </AnimatePresence>
+      )}
 
-      {/* Completed section */}
+      {/* ── Subject view ── */}
+      {view === "course" && (
+        <AnimatePresence mode="popLayout">
+          {byCourse.map((group) => {
+            const accent = group.accentColor ?? fallbackColor(group.courseName);
+            return (
+              <motion.section key={group.courseCanvasId} layout className="mb-5">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: accent }} />
+                  <p className="text-[11px] font-medium uppercase tracking-widest text-[#6b7280]">
+                    {group.courseName}
+                  </p>
+                  <span className="text-[11px] text-[#374151] ml-auto">{group.tasks.length}</span>
+                </div>
+                <ul className="space-y-1.5">
+                  <AnimatePresence mode="popLayout">
+                    {group.tasks.map((task) => (
+                      <TaskCard key={task.id} task={task} onComplete={handleComplete} disabled={isPending} />
+                    ))}
+                  </AnimatePresence>
+                </ul>
+              </motion.section>
+            );
+          })}
+        </AnimatePresence>
+      )}
+
+      {/* ── Completed ── */}
       {completed.length > 0 && (
         <section className="mt-6 border-t border-[#2a2a3a] pt-4">
           <button
@@ -202,23 +214,17 @@ export default function TaskDashboard({ pending, completed, lastSync }: Props) {
             <span>{showCompleted ? "▾" : "▸"}</span>
             Completed ({completed.length})
           </button>
-
           <AnimatePresence>
             {showCompleted && (
               <motion.ul
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
+                transition={{ duration: 0.18 }}
                 className="space-y-1.5 overflow-hidden"
               >
                 {completed.map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    onUncomplete={handleUncomplete}
-                    isPending={isPending}
-                  />
+                  <TaskCard key={task.id} task={task} onUncomplete={handleUncomplete} disabled={isPending} />
                 ))}
               </motion.ul>
             )}
