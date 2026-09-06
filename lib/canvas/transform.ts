@@ -1,17 +1,14 @@
 /**
- * Transforms raw Canvas API objects into NewTask records for Drizzle upsert.
- * All timestamps are normalised to ISO 8601 UTC strings.
- * HTML is stripped from descriptions to plain text (server-side, no DOM).
+ * Transforms raw Canvas API objects into NewTask records.
+ * Descriptions: strip HTML, store up to 2000 chars (up from 500).
  */
 import type { NewTask } from "@/drizzle/schema";
-
-// ── Canvas API types (minimal — only fields we use) ────────────────────────
 
 export type CanvasAssignment = {
   id: number;
   name: string;
   description: string | null;
-  due_at: string | null;          // ISO 8601, may be null
+  due_at: string | null;
   points_possible: number | null;
   html_url: string;
   submission_types: string[];
@@ -20,18 +17,13 @@ export type CanvasAssignment = {
 export type CanvasModuleItem = {
   id: number;
   title: string;
-  type: string;                   // "Assignment"|"Page"|"File"|"ExternalUrl"|etc.
+  type: string;
   html_url: string | null;
   external_url: string | null;
-  completion_requirement?: {
-    type: string;
-    completed: boolean;
-  };
+  page_url?: string | null;
+  completion_requirement?: { type: string; completed: boolean };
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/** Strip HTML tags; collapse whitespace; truncate to 500 chars. */
 function stripHtml(html: string | null): string | null {
   if (!html) return null;
   const text = html
@@ -41,25 +33,19 @@ function stripHtml(html: string | null): string | null {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-  return text.slice(0, 500) || null;
+  return text.slice(0, 2000) || null;
 }
 
-/** Ensure a Canvas timestamp is UTC ISO 8601, or return null. */
 function toUtc(ts: string | null): string | null {
   if (!ts) return null;
-  // Canvas always sends UTC (Z suffix). Parse and re-serialize to be safe.
   const d = new Date(ts);
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-// ── Transformers ───────────────────────────────────────────────────────────
-
-export function assignmentToTask(
-  a: CanvasAssignment,
-  courseCanvasId: string
-): NewTask {
+export function assignmentToTask(a: CanvasAssignment, courseCanvasId: string): NewTask {
   return {
     courseCanvasId,
     canvasId:       String(a.id),
@@ -76,20 +62,17 @@ export function assignmentToTask(
   };
 }
 
-export function moduleItemToTask(
-  m: CanvasModuleItem,
-  courseCanvasId: string
-): NewTask {
+export function moduleItemToTask(m: CanvasModuleItem, courseCanvasId: string): NewTask {
   return {
     courseCanvasId,
     canvasId:       String(m.id),
     sourceType:     "module_item",
     title:          m.title,
     itemType:       m.type,
-    dueAt:          null,          // module items never have due dates
+    dueAt:          null,
     pointsPossible: null,
     url:            m.html_url ?? m.external_url ?? null,
-    description:    null,
+    description:    null,   // fetched separately in sync for Page type
     completedAt:    null,
     snoozedUntil:   null,
     lastSyncedAt:   new Date().toISOString(),
