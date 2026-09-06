@@ -50,6 +50,11 @@ export async function extractReadings(
   const text = prepareText(pageHtml);
   if (text.length < 50) return [];
 
+  // Fast path: no API key configured → no AI calls. Caller also guards on
+  // this, but defending at the leaf means direct test callers / future
+  // re-entry points behave the same.
+  if (!process.env.GROQ_API_KEY) return [];
+
   const prompt = `You are extracting a structured reading/preparation list from a university course page.
 
 Course: ${courseName}
@@ -97,6 +102,10 @@ Rules:
           { role: "user", content: prompt },
         ],
       }),
+      // 2-minute ceiling per call so a single hung request can't pin the
+      // whole sync. Llama-3.3-70b normally responds in 3–8s; this is just
+      // insurance against network stalls or model timeouts.
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (!res.ok) {
