@@ -91,7 +91,11 @@ Rules:
         "Authorization": `Bearer ${process.env.GROQ_API_KEY!}`,
       },
       body: JSON.stringify({
-        model:       "llama-3.3-70b-versatile",
+        // `llama-3.3-70b-versatile` was retired by Groq; `gpt-oss-120b` is
+        // the closest free replacement (120B params, json_mode, structured
+        // outputs). If you ever see "model not found" again, list available
+        // models with: GET https://api.groq.com/openai/v1/models
+        model:       process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
         max_tokens:  2048,
         temperature: 0,
         messages: [
@@ -103,13 +107,14 @@ Rules:
         ],
       }),
       // 2-minute ceiling per call so a single hung request can't pin the
-      // whole sync. Llama-3.3-70b normally responds in 3–8s; this is just
+      // whole sync. GPT-OSS-120B normally responds in 3–8s; this is just
       // insurance against network stalls or model timeouts.
       signal: AbortSignal.timeout(120_000),
     });
 
     if (!res.ok) {
-      console.error("Groq API error:", res.status, await res.text());
+      const body = await res.text();
+      console.error(`Groq API ${res.status} for page "${pageTitle}":`, body);
       return [];
     }
 
@@ -127,7 +132,7 @@ Rules:
     const parsed = JSON.parse(match[0]) as ExtractedReading[];
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.error("extractReadings error:", err);
+    console.error(`extractReadings failed for page "${pageTitle}":`, err);
     return [];
   }
 }
