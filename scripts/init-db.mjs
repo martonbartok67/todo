@@ -32,26 +32,31 @@ const STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS courses_canvas_id_idx ON courses (canvas_id)`,
 
   `CREATE TABLE IF NOT EXISTS tasks (
-     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-     course_canvas_id TEXT NOT NULL,
-     canvas_id        TEXT NOT NULL,
-     source_type      TEXT NOT NULL,
-     title            TEXT NOT NULL,
-     item_type        TEXT,
-     due_at           TEXT,
-     points_possible  REAL,
-     url              TEXT,
-     description      TEXT,
-     completed_at     TEXT,
-     snoozed_until    TEXT,
-     last_synced_at   TEXT NOT NULL DEFAULT (datetime('now')),
-     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+     course_canvas_id      TEXT NOT NULL,
+     canvas_id             TEXT NOT NULL,
+     source_type           TEXT NOT NULL,
+     title                 TEXT NOT NULL,
+     item_type             TEXT,
+     due_at                TEXT,
+     points_possible       REAL,
+     url                   TEXT,
+     description           TEXT,
+     completed_at          TEXT,
+     snoozed_until         TEXT,
+     last_synced_at        TEXT NOT NULL DEFAULT (datetime('now')),
+     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+     -- Step 2: AI classification
+     classification        TEXT NOT NULL DEFAULT 'unclassified',
+     classification_reason TEXT,
+     classified_at         TEXT
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS tasks_canvas_source_idx ON tasks (canvas_id, source_type)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_course_idx    ON tasks (course_canvas_id)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_due_at_idx    ON tasks (due_at)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_completed_idx ON tasks (completed_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_course_idx         ON tasks (course_canvas_id)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_due_at_idx         ON tasks (due_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_completed_idx      ON tasks (completed_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_classification_idx ON tasks (classification)`,
 
   `CREATE TABLE IF NOT EXISTS sync_log (
      id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +108,31 @@ const STATEMENTS = [
      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
    )`,
   `INSERT OR IGNORE INTO user_settings (id, ical_url, ical_label) VALUES (1, NULL, NULL)`,
+
+  // ── reading_items (Step 3) ──────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS reading_items (
+     id               INTEGER PRIMARY KEY AUTOINCREMENT,
+     course_canvas_id TEXT NOT NULL,
+     course_name      TEXT NOT NULL,
+     lecture_label    TEXT NOT NULL,
+     reading_text     TEXT NOT NULL,
+     detail           TEXT,
+     completed_at     TEXT,
+     source_page_url  TEXT,
+     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+     updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+     -- Step 3: structured syllabus fields
+     week_number      INTEGER,
+     lecture_slot     TEXT NOT NULL DEFAULT 'unknown',
+     source           TEXT NOT NULL DEFAULT 'ai',
+     lecture_date     TEXT
+   )`,
+  `DROP INDEX IF EXISTS reading_items_unique_idx`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS reading_items_unique_idx
+     ON reading_items (course_canvas_id, lecture_label, reading_text, source)`,
+  `CREATE        INDEX IF NOT EXISTS reading_items_course_idx ON reading_items (course_canvas_id)`,
+  `CREATE        INDEX IF NOT EXISTS reading_items_week_idx
+     ON reading_items (course_canvas_id, week_number, lecture_slot)`,
 ];
 
 async function exec(sql) {

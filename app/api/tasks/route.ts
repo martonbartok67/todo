@@ -12,6 +12,7 @@ import {
   getCompletedTasks,
   getUpcomingDeadlines,
 } from "@/lib/tasks";
+import { dbReady } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic"; // never cache — always live
@@ -20,6 +21,11 @@ export async function GET(req: NextRequest) {
   const filter = req.nextUrl.searchParams.get("filter") ?? "pending";
 
   try {
+    // Make sure schema is bootstrapped (new columns + indexes applied)
+    // before any read query. Without this, the very first request after
+    // a deploy races with the background ensureSchema() and hits
+    // "no such column".
+    await dbReady();
     let data;
     if (filter === "completed") {
       data = await getCompletedTasks();

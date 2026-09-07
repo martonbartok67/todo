@@ -3,7 +3,8 @@ import { courses, tasks, syncLog, readingItems, timetableEvents, userSettings } 
 import { fetchAllPages } from "./client";
 import { assignmentToTask, moduleItemToTask, type CanvasAssignment, type CanvasModuleItem } from "./transform";
 import { extractReadings } from "./extract";
-import { sql, eq } from "drizzle-orm";
+import { classifyItems } from "./classify";
+import { sql, eq, and } from "drizzle-orm";
 
 type CanvasCourse = {
   id: number; name: string; course_code: string | null;
@@ -511,6 +512,7 @@ async function runAIForPages(
       logEntry.extracted = readings.length;
 
       for (const r of readings) {
+        const now = new Date().toISOString();
         await db.insert(readingItems).values({
           courseCanvasId: courseId,
           courseName,
@@ -518,9 +520,28 @@ async function runAIForPages(
           readingText:    r.readingText,
           detail:         r.detail ?? null,
           sourcePageUrl:  page.html_url ?? null,
-          createdAt:      new Date().toISOString(),
-          updatedAt:      new Date().toISOString(),
-        }).onConflictDoNothing();
+          weekNumber:     r.weekNumber,
+          lectureSlot:    r.lectureSlot,
+          source:         "ai",
+          createdAt:      now,
+          updatedAt:      now,
+        }).onConflictDoUpdate({
+          // Re-extract on a re-run: overwrite week/lecture-slot/detail so
+          // the latest AI verdict wins. Leave completedAt, source, and
+          // sourcePageUrl alone — those are user/Canvas state.
+          target: [
+            readingItems.courseCanvasId,
+            readingItems.lectureLabel,
+            readingItems.readingText,
+            readingItems.source,
+          ],
+          set: {
+            weekNumber:  r.weekNumber,
+            lectureSlot: r.lectureSlot,
+            detail:      r.detail ?? null,
+            updatedAt:   now,
+          },
+        });
         readingsExtracted++;
       }
     } catch (err) {
@@ -836,6 +857,134 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
     };
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Step 2: AI classification
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Result type for `runClassifyForCourse`.
+ *
+ * Same shape as `CourseAIResult` for consistency — the workflow that
+ * iterates courses can drive either AI pass without branching.
+ */
+export type ClassifyResult2 = {
+  status:            "success" | "skipped" | "error";
+  courseId:          string;
+  courseName:        string;
+  itemsClassified:   number;
+  itemsFlaggedInfo:  number;
+  durationMs:        number;
+  error?:            string;
+};
+
+/**
+ * Classify every task for one course in batches of 30.
+ *
+ * Only "unclassified" rows are sent to the AI — once a verdict lands
+ * we don't re-classify on every cron tick. To force a re-classification
+ * (e.g. after the AI prompt changes), call this with `force=true`.
+ *
+ * Why batches of 30: each item is ~80 tokens once you include the
+ * description; 30 fits comfortably in the 8K TPM free-tier ceiling
+ * without triggering rate limits.
+ */
+export async function runClassifyForCourse(
+  courseId: string,
+  options: { force?: boolean; batchSize?: number } = {},
+): Promise<ClassifyResult2> {
+  const startedAt   = Date.now();
+  const batchSize   = options.batchSize ?? 30;
+  const force       = options.force ?? false;
+
+  try {
+    // Course lookup (so we can surface its name in the result).
+    const courseRows = await db
+      .select({ name: courses.name })
+      .from(courses)
+      .where(eq(courses.canvasId, courseId))
+      .limit(1);
+    const courseName = courseRows[0]?.name ?? "(unknown)";
+
+    // Pull all unclassified tasks for this course.
+    // `force=true` re-classifies everything regardless of current state.
+    const where = force
+      ? eq(tasks.courseCanvasId, courseId)
+      : and(
+          eq(tasks.courseCanvasId, courseId),
+          eq(tasks.classification, "unclassified"),
+        );
+
+    const pending = await db
+      .select({
+        id:          tasks.id,
+        title:       tasks.title,
+        description: tasks.description,
+        itemType:    tasks.itemType,
+      })
+      .from(tasks)
+      .where(where);
+
+    if (pending.length === 0) {
+      return {
+        status: "skipped", courseId, courseName,
+        itemsClassified: 0, itemsFlaggedInfo: 0,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    if (!process.env.GROQ_API_KEY) {
+      return {
+        status: "skipped", courseId, courseName,
+        itemsClassified: 0, itemsFlaggedInfo: 0,
+        durationMs: Date.now() - startedAt,
+        error: "GROQ_API_KEY not set",
+      };
+    }
+
+    // Process in batches.
+    let classified = 0;
+    let flagged    = 0;
+    for (let i = 0; i < pending.length; i += batchSize) {
+      const batch = pending.slice(i, i + batchSize);
+      const verdicts = await classifyItems(batch);
+      const now = new Date().toISOString();
+
+      for (const item of batch) {
+        const v = verdicts.get(item.id);
+        if (!v) continue; // AI didn't return a verdict for this one — leave as-is
+        await db
+          .update(tasks)
+          .set({
+            classification:       v.verdict,
+            classificationReason: v.reason || null,
+            classifiedAt:         now,
+            updatedAt:            now,
+          })
+          .where(eq(tasks.id, item.id));
+        classified++;
+        if (v.verdict === "info") flagged++;
+      }
+    }
+
+    return {
+      status: "success", courseId, courseName,
+      itemsClassified: classified, itemsFlaggedInfo: flagged,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (err) {
+    return {
+      status: "error", courseId, courseName: "(error)",
+      itemsClassified: 0, itemsFlaggedInfo: 0,
+      durationMs: Date.now() - startedAt,
+      error: String(err),
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// iCal (RFC 5545) parser
+// ─────────────────────────────────────────────────────────────────────────
 
 /**
  * Minimal iCal (RFC 5545) parser. Returns every VEVENT in the feed —

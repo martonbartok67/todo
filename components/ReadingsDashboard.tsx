@@ -1,8 +1,13 @@
 "use client";
 import { useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { completeReading, uncompleteReading } from "@/app/actions/readings";
+import {
+  completeReading,
+  uncompleteReading,
+} from "@/app/actions/readings";
 import type { ReadingItem } from "@/drizzle/schema";
+import { ReadingRow } from "./ReadingRow";
+import { ReadingSheet, type SheetReading } from "./ReadingSheet";
 
 type CourseGroup = {
   courseName:     string;
@@ -34,43 +39,58 @@ function fallbackColor(name: string): string {
 }
 
 export default function ReadingsDashboard({
-  items, tableReady,
+  items, courses, tableReady,
 }: {
-  items: ReadingItem[];
+  items:     ReadingItem[];
+  courses:   Array<{ canvasId: string; name: string }>;
   tableReady: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const groups    = groupReadings(items);
   const doneCount = items.filter((i) => i.completedAt).length;
 
+  // Sheet state. `null` = closed, otherwise the reading being added/edited.
+  // `mode` distinguishes add vs edit so the sheet copy + submit button
+  // stay accurate.
+  const [sheet, setSheet] = useState<{
+    mode: "add" | "edit";
+    reading: SheetReading | null;
+  } | null>(null);
+
   function handleComplete(id: number)   { startTransition(() => { completeReading(id); }); }
   function handleUncomplete(id: number) { startTransition(() => { uncompleteReading(id); }); }
 
   return (
     <>
-      <header className="flex items-center justify-between mb-5">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Readings</h1>
-          <p className="text-xs text-[#6b7280] mt-0.5">
+      <header className="flex items-center justify-between mb-5 gap-3">
+        <div className="min-w-0">
+          <h1 className="text-lg md:text-base font-semibold tracking-tight">Readings</h1>
+          <p className="text-xs text-muted mt-0.5 tabular-nums">
             {items.length > 0
               ? `${doneCount}/${items.length} complete · AI-extracted from course manuals`
               : "AI-extracted from course manuals"}
           </p>
         </div>
+        <button
+          onClick={() => setSheet({ mode: "add", reading: null })}
+          className="shrink-0 px-3 py-1.5 text-[11px] font-medium rounded-lg border border-border bg-surface-1 hover:bg-surface-2 transition-colors"
+        >
+          + Add reading
+        </button>
       </header>
 
       {/* Table not ready */}
       {!tableReady && (
-        <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-5 text-sm text-[#6b7280]">
-          <p className="text-white font-medium mb-1">Database table missing</p>
+        <div className="rounded-xl bg-surface-1 border border-border px-4 py-5 text-sm text-muted">
+          <p className="text-foreground font-medium mb-1">Database table missing</p>
           <p>Run <code className="text-[#6366f1]">npx drizzle-kit push</code> locally to create the <code className="text-[#6366f1]">reading_items</code> table, then trigger a sync.</p>
         </div>
       )}
 
       {/* Empty — table exists but no readings yet */}
       {tableReady && items.length === 0 && (
-        <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-5 text-sm text-[#6b7280]">
-          <p className="text-white font-medium mb-1">No readings extracted yet</p>
+        <div className="rounded-xl bg-surface-1 border border-border px-4 py-5 text-sm text-muted">
+          <p className="text-foreground font-medium mb-1">No readings extracted yet</p>
           <p>Make sure <code className="text-[#6366f1]">GROQ_API_KEY</code> is set in Vercel env vars, then trigger a manual sync.</p>
           <p className="mt-2 text-[11px]">Readings are only extracted from Canvas pages whose title or content contains keywords like "syllabus", "reading list", "course manual", or "studiemateriaal".</p>
         </div>
@@ -86,10 +106,10 @@ export default function ReadingsDashboard({
           <section key={course.courseCanvasId} className="mb-7">
             <div className="flex items-center gap-2 mb-3">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: accent }} />
-              <p className="text-[11px] font-medium uppercase tracking-widest text-[#6b7280] flex-1 truncate">
+              <p className="text-[11px] font-medium uppercase tracking-widest text-muted flex-1 truncate">
                 {course.courseName}
               </p>
-              <span className="text-[11px] text-[#374151] shrink-0">{courseDone}/{courseTotal}</span>
+              <span className="text-[11px] text-muted/70 shrink-0 tabular-nums">{courseDone}/{courseTotal}</span>
             </div>
 
             {course.lectures.map((lecture) => (
@@ -99,47 +119,15 @@ export default function ReadingsDashboard({
                 </p>
                 <ul className="space-y-1.5">
                   <AnimatePresence mode="popLayout">
-                    {lecture.items.map((item) => {
-                      const done = !!item.completedAt;
-                      return (
-                        <motion.li
-                          key={item.id}
-                          layout
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: -16 }}
-                          transition={{ duration: 0.15 }}
-                          className="flex items-start gap-3 rounded-xl bg-[#111118] border border-[#2a2a3a] px-3 py-2.5"
-                        >
-                          <button
-                            disabled={isPending}
-                            onClick={() => done ? handleUncomplete(item.id) : handleComplete(item.id)}
-                            className={[
-                              "mt-0.5 shrink-0 w-5 h-5 rounded-full border border-[#2a2a3a] transition-all flex items-center justify-center",
-                              done ? "bg-[#6366f1] border-[#6366f1]" : "hover:border-[#6366f1]",
-                              isPending ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
-                            ].join(" ")}
-                            aria-label={done ? "Mark unread" : "Mark read"}
-                          >
-                            {done && <span className="text-[10px] text-white leading-none">✓</span>}
-                          </button>
-
-                          <div className="flex-1 min-w-0">
-                            <p className={["text-sm leading-snug", done ? "line-through text-[#6b7280]" : "text-white"].join(" ")}>
-                              {item.readingText}
-                            </p>
-                            {item.detail && (
-                              <p className="text-[11px] text-[#6b7280] mt-0.5">{item.detail}</p>
-                            )}
-                          </div>
-
-                          {item.sourcePageUrl && (
-                            <a href={item.sourcePageUrl} target="_blank" rel="noopener noreferrer"
-                              className="shrink-0 text-[#6b7280] hover:text-white transition-colors mt-0.5 text-xs">↗</a>
-                          )}
-                        </motion.li>
-                      );
-                    })}
+                    {lecture.items.map((item) => (
+                      <ReadingRow
+                        key={item.id}
+                        item={item}
+                        onComplete={handleComplete}
+                        onUncomplete={handleUncomplete}
+                        onEdit={(it) => setSheet({ mode: "edit", reading: it })}
+                      />
+                    ))}
                   </AnimatePresence>
                 </ul>
               </div>
@@ -147,6 +135,16 @@ export default function ReadingsDashboard({
           </section>
         );
       })}
+
+      {/* Manual reading side-sheet (add + edit + delete). */}
+      {sheet && (
+        <ReadingSheet
+          mode={sheet.mode}
+          reading={sheet.reading}
+          courses={courses}
+          onClose={() => setSheet(null)}
+        />
+      )}
     </>
   );
 }

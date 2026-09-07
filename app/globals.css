@@ -2,10 +2,83 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 🎨 THE PAINT BOX
+ *
+ * Tailwind says "I want to know what color `var(--background)` is!"
+ * and THIS file answers.
+ *
+ * We define four "magic crayons" — they each have TWO names:
+ *   one for day mode (`.light` is the class on <html>)
+ *   one for night mode (`.dark` is the class on <html>)
+ *
+ * `next-themes` flips the class on <html>, and the CSS automatically
+ * swaps which crayon is being used. Ta-da! ☀️🌙
+ *
+ * The numbers after the colors (e.g. `0 0% 100%`) are HSL values —
+ * Hue, Saturation, Lightness — which is just a fancy way of describing
+ * a color. Don't worry about memorizing them.
+ */
+@layer base {
+  :root {
+    /* ☀️ Day mode — bright paper, dark ink */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 4%;
+    --border:     240 6% 90%;
+    --muted:      240 4% 46%;
+
+    /* Surface tints — barely-visible card backgrounds. In light mode they're
+     * almost-white; in dark mode they're slightly-lighter-than-the-page. This
+     * keeps the same visual rhythm ("the card is one shade off the page") in
+     * both themes. */
+    --surface-1: 240 5% 96%;   /* near-white card on white page */
+    --surface-2: 240 5% 92%;   /* slightly darker chip / nested card */
+    --surface-3: 240 5% 88%;   /* hover / pressed state */
+    --surface-default: 240 10% 4%; /* the page-edge tone (used by bg-surface) */
+  }
+
+  .dark {
+    /* 🌙 Night mode — dark paper, light ink */
+    --background: 240 10% 4%;
+    --foreground: 0 0% 98%;
+    --border:     240 4% 16%;
+    --muted:      240 5% 65%;
+
+    --surface-1: 240 4% 9%;    /* near-black card, slightly lifted */
+    --surface-2: 240 4% 13%;
+    --surface-3: 240 4% 17%;
+    --surface-default: 240 10% 4%;
+  }
+}
+
+/* Every box gets its size right, just like normal CSS. */
 * {
   box-sizing: border-box;
 }
 
+/*
+ * 🌙→☀️ Smooth theme transitions.
+ * When the user clicks the toggle, the `--background`/`--foreground`
+ * variables flip, and every element using them cross-fades over 200ms.
+ * `transition-property: background-color, color, border-color` targets
+ * exactly the tokens that change with theme, not everything (avoids
+ * animating transforms / opacity on every hover).
+ */
+html {
+  transition: background-color 200ms ease, color 200ms ease;
+}
+html, body {
+  transition-property: background-color, color, border-color;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
+}
+
+/*
+ * 🖼️ The whole page uses our magic crayons now.
+ * `bg-background` = "use the --background crayon for the background".
+ * `text-foreground` = "use the --foreground crayon for text".
+ * When the user toggles dark mode, both crayons flip automatically.
+ */
 body {
-  background: #0a0a0f;
+  @apply bg-background text-foreground antialiased;
 }

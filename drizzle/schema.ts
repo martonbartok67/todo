@@ -32,11 +32,22 @@ export const tasks = sqliteTable("tasks", {
   lastSyncedAt:   text("last_synced_at").notNull().default(sql`(datetime('now'))`),
   createdAt:      text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt:      text("updated_at").notNull().default(sql`(datetime('now'))`),
+
+  // ── Step 2: AI classification ────────────────────────────────────────
+  // "task"   → show in the actionable Tasks list
+  // "info"   → hide from Tasks, show in the new Resources tab
+  // "unclassified" → default; treated as "task" until the AI runs
+  classification:       text("classification", { enum: ["task","info","unclassified"] })
+                          .notNull()
+                          .default("unclassified"),
+  classificationReason: text("classification_reason"),     // short AI explanation
+  classifiedAt:         text("classified_at"),             // ISO timestamp
 }, (t) => ({
-  canvasSourceIdx: uniqueIndex("tasks_canvas_source_idx").on(t.canvasId, t.sourceType),
-  courseIdx:       index("tasks_course_idx").on(t.courseCanvasId),
-  dueAtIdx:        index("tasks_due_at_idx").on(t.dueAt),
-  completedIdx:    index("tasks_completed_idx").on(t.completedAt),
+  canvasSourceIdx:   uniqueIndex("tasks_canvas_source_idx").on(t.canvasId, t.sourceType),
+  courseIdx:         index("tasks_course_idx").on(t.courseCanvasId),
+  dueAtIdx:          index("tasks_due_at_idx").on(t.dueAt),
+  completedIdx:      index("tasks_completed_idx").on(t.completedAt),
+  classificationIdx: index("tasks_classification_idx").on(t.classification),
 }));
 
 export const syncLog = sqliteTable("sync_log", {
@@ -109,9 +120,14 @@ export const userSettings = sqliteTable("user_settings", {
 });
 
 /**
- * AI-extracted reading items from course syllabi / manuals.
- * One row per reading entry (e.g. "Week 3 — Chapter 4, Smith 2019").
- * Unique on (courseCanvasId, lectureLabel, readingText) to allow safe upsert.
+ * AI-extracted (or manually added) reading items from course syllabi /
+ * manuals. One row per reading entry (e.g. "Week 3 — Chapter 4, Smith 2019").
+ *
+ * Step 3 expands this with structured week/lecture info so the deadlines
+ * pipeline (Step 4) can attach due dates to specific lectures.
+ *
+ * Unique on (courseCanvasId, lectureLabel, readingText, source) so the
+ * AI re-runs don't overwrite user-added manual entries.
  */
 export const readingItems = sqliteTable("reading_items", {
   id:             integer("id").primaryKey({ autoIncrement: true }),
@@ -125,14 +141,39 @@ export const readingItems = sqliteTable("reading_items", {
   detail:         text("detail"),
   // Whether the student has marked this reading done locally
   completedAt:    text("completed_at"),
-  // Which Canvas page this was extracted from
+  // Which Canvas page this was extracted from (null for manual entries)
   sourcePageUrl:  text("source_page_url"),
   createdAt:      text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt:      text("updated_at").notNull().default(sql`(datetime('now'))`),
+
+  // ── Step 3: structured syllabus data ──────────────────────────────
+  // ISO-style week number (e.g. 36 for "Week 36"). NULL when the source
+  // page doesn't mention a week — Step 4 will tolerate NULLs.
+  weekNumber:  integer("week_number"),
+  // Which lecture slot within the week. Defaults to "unknown" when the
+  // AI can't determine; user can correct it via the edit UI.
+  lectureSlot: text("lecture_slot", {
+    enum: ["lecture_1", "lecture_2", "lecture_3", "unknown"],
+  }).default("unknown"),
+  // "ai" for AI-extracted rows, "manual" for user-added rows. Drives the
+  // unique index so manual rows aren't clobbered when the AI re-runs.
+  source:      text("source", { enum: ["ai", "manual"] })
+                  .notNull()
+                  .default("ai"),
+  // Concrete date the lecture happens. NULL until Step 4's deadline
+  // alignment fills it in by matching against timetable_events.
+  lectureDate: text("lecture_date"),
 }, (t) => ({
   courseIdx: index("reading_items_course_idx").on(t.courseCanvasId),
+  weekIdx:   index("reading_items_week_idx").on(
+    t.courseCanvasId, t.weekNumber, t.lectureSlot
+  ),
+  // Note: the unique index now includes `source` so a manual row can
+  // coexist with an AI row that happens to have the same text. The
+  // `lecture_slot` column default ("unknown") ensures older rows
+  // written before the new column existed satisfy the index.
   uniqueReading: uniqueIndex("reading_items_unique_idx").on(
-    t.courseCanvasId, t.lectureLabel, t.readingText
+    t.courseCanvasId, t.lectureLabel, t.readingText, t.source
   ),
 }));
 

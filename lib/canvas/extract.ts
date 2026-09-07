@@ -1,12 +1,21 @@
 /**
  * AI-powered extraction of reading lists from Canvas course pages.
  * Handles EUR/Erasmus-style schedules: week tables, module lists, chapter refs.
+ *
+ * Step 3 — the AI also returns structured week + lecture-slot info so
+ * the deadlines pipeline (Step 4) can attach due dates to specific
+ * lectures. Both fields are nullable: the AI emits null when the source
+ * page doesn't mention a week (e.g. a chapter list that spans the term).
  */
 
+export type LectureSlot = "lecture_1" | "lecture_2" | "lecture_3" | "unknown";
+
 export type ExtractedReading = {
-  lectureLabel: string;  // e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
-  readingText:  string;  // e.g. "Chapters 1 & 3" or "Chapter 5"
-  detail:       string | null;  // topic/title if available
+  lectureLabel: string;          // e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
+  readingText:  string;          // e.g. "Chapters 1 & 3" or "Chapter 5"
+  detail:       string | null;    // topic/title if available
+  weekNumber:   number | null;   // ISO-style week number, e.g. 36
+  lectureSlot:  LectureSlot;      // "lecture_1" / "lecture_2" / "lecture_3" / "unknown"
 };
 
 // Broad keyword set — matches schedules, module overviews, and course manuals
@@ -85,6 +94,8 @@ Return ONLY a JSON array. Each element must have exactly these keys:
 - "lectureLabel": string — combine week+lecture info, e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)" or "Module 4: Cultural and institutional frameworks"
 - "readingText": string — the chapter/reading reference OR the module topic itself if no explicit chapter is listed, e.g. "Chapters 1 & 3" or "Chapter 5 — Cultural Frameworks" or "Module 4: Cultural and institutional frameworks"
 - "detail": string or null — the lecture topic or extra note, e.g. "What is OB? Introduction to the field" or "Welcome / 4.1 What are institutions? / 4.2 What are institutions? Culture"
+- "weekNumber": integer or null — the ISO-style week number (1-53), e.g. 36. Infer from "Week 36", "wk38", "Week 1" etc. Return null if no week reference exists (e.g. a chapter list that spans the term).
+- "lectureSlot": one of "lecture_1", "lecture_2", "lecture_3", or "unknown" — which lecture within the week. "lecture_1" for the first session of the week, "lecture_2" for the second, "lecture_3" for the third. Use "unknown" if the page doesn't distinguish between multiple sessions, or if the entry spans the whole week.
 
 Rules:
 - One entry per lecture/module per reading reference
@@ -100,6 +111,21 @@ Rules:
     console.error(`extractReadings failed for page "${pageTitle}":`, err);
     return [];
   }
+}
+
+/**
+ * Coerce a possibly-malformed lecture-slot value into the strict union.
+ * The model sometimes returns lowercase, capitalised, or unexpected
+ * values like "Lecture 1" or "1". Anything we can't confidently map
+ * falls through to "unknown" so the rest of the row is preserved.
+ */
+function coerceLectureSlot(value: unknown): LectureSlot {
+  if (typeof value !== "string") return "unknown";
+  const norm = value.toLowerCase().trim().replace(/[\s-]+/g, "_");
+  if (norm === "lecture_1" || norm === "lecture1" || norm === "1" || norm === "l1") return "lecture_1";
+  if (norm === "lecture_2" || norm === "lecture2" || norm === "2" || norm === "l2") return "lecture_2";
+  if (norm === "lecture_3" || norm === "lecture3" || norm === "3" || norm === "l3") return "lecture_3";
+  return "unknown";
 }
 
 /**
@@ -178,7 +204,39 @@ async function callGroqWithRetry(
       if (!match) return [];
 
       const parsed = JSON.parse(match[0]) as ExtractedReading[];
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+
+      // Coerce the new structured fields.
+      return parsed.map((r) => {
+        // Handle stringified numbers or objects
+        let week: number | null = null;
+        if (typeof r.week === "number") {
+          week = r.week;
+        } else if (typeof r.weekNumber === "number") {
+          week = r.weekNumber;
+        } else if (typeof r.weekNumber === "string") {
+          const parsedWeek = parseInt(r.weekNumber, 10);
+          if (!isNaN(parsedWeek)) week = parsedWeek;
+        }
+
+        // Handle lecture slot
+        let lectureSlot: LectureSlot = "unknown";
+        if (typeof r.lecture === "number") {
+          if (r.lecture === 1) lectureSlot = "lecture_1";
+          else if (r.lecture === 2) lectureSlot = "lecture_2";
+          else if (r.lecture === 3) lectureSlot = "lecture_3";
+        } else if (typeof r.lectureSlot === "string") {
+          lectureSlot = coerceLectureSlot(r.lectureSlot);
+        }
+
+        return {
+          lectureLabel: String(r.lectureLabel ?? "").trim(),
+          readingText:  String(r.readingText ?? `Chapter ${r.chapter ?? ""}`).trim(),
+          detail:       r.detail ? String(r.detail) : null,
+          weekNumber:   week,
+          lectureSlot:  lectureSlot,
+        };
+      }).filter((r) => r.lectureLabel && r.readingText);
     } catch (err) {
       lastErr = err;
       // Network/timeout — also worth retrying.

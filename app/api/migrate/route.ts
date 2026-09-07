@@ -35,17 +35,70 @@ export async function GET(req: NextRequest) {
     `);
     results.push("✓ reading_items table ready");
 
+    // Step 3 — add the new structured-syllabus columns to older DBs that
+    // pre-date this change. Safe no-op if the columns already exist.
+    const readingCols = (await db.all(sql`PRAGMA table_info(reading_items)`)) as Array<{ name: string }>;
+    const readingColNames = new Set(readingCols.map((c) => c.name));
+    if (!readingColNames.has("week_number")) {
+      await db.run(sql`ALTER TABLE reading_items ADD COLUMN week_number INTEGER`);
+      results.push("✓ reading_items.week_number column added");
+    }
+    if (!readingColNames.has("lecture_slot")) {
+      await db.run(sql`ALTER TABLE reading_items ADD COLUMN lecture_slot TEXT NOT NULL DEFAULT 'unknown'`);
+      results.push("✓ reading_items.lecture_slot column added");
+    }
+    if (!readingColNames.has("source")) {
+      await db.run(sql`ALTER TABLE reading_items ADD COLUMN source TEXT NOT NULL DEFAULT 'ai'`);
+      results.push("✓ reading_items.source column added");
+    }
+    if (!readingColNames.has("lecture_date")) {
+      await db.run(sql`ALTER TABLE reading_items ADD COLUMN lecture_date TEXT`);
+      results.push("✓ reading_items.lecture_date column added");
+    }
+
+    // Step 3 — the unique index now includes `source` so manual rows
+    // can coexist with AI rows. SQLite can't add a column to an
+    // existing index, so we DROP and recreate. Safe because the
+    // (course_canvas_id, lecture_label, reading_text) tuple is still
+    // enforced — adding `source` is strictly more permissive.
+    await db.run(sql`DROP INDEX IF EXISTS reading_items_unique_idx`);
     await db.run(sql`
       CREATE UNIQUE INDEX IF NOT EXISTS reading_items_unique_idx
-      ON reading_items (course_canvas_id, lecture_label, reading_text)
+      ON reading_items (course_canvas_id, lecture_label, reading_text, source)
     `);
-    results.push("✓ unique index ready");
+    results.push("✓ reading_items unique index (with source) ready");
 
     await db.run(sql`
       CREATE INDEX IF NOT EXISTS reading_items_course_idx
       ON reading_items (course_canvas_id)
     `);
     results.push("✓ course index ready");
+
+    await db.run(sql`
+      CREATE INDEX IF NOT EXISTS reading_items_week_idx
+      ON reading_items (course_canvas_id, week_number, lecture_slot)
+    `);
+    results.push("✓ reading_items week index ready");
+
+    // ── Step 2: AI classification columns + index on `tasks` ───────────
+    const taskCols = (await db.all(sql`PRAGMA table_info(tasks)`)) as Array<{ name: string }>;
+    const taskColNames = new Set(taskCols.map((c) => c.name));
+    if (!taskColNames.has("classification")) {
+      await db.run(sql`ALTER TABLE tasks ADD COLUMN classification TEXT NOT NULL DEFAULT 'unclassified'`);
+      results.push("✓ tasks.classification column added");
+    }
+    if (!taskColNames.has("classification_reason")) {
+      await db.run(sql`ALTER TABLE tasks ADD COLUMN classification_reason TEXT`);
+      results.push("✓ tasks.classification_reason column added");
+    }
+    if (!taskColNames.has("classified_at")) {
+      await db.run(sql`ALTER TABLE tasks ADD COLUMN classified_at TEXT`);
+      results.push("✓ tasks.classified_at column added");
+    }
+    await db.run(sql`
+      CREATE INDEX IF NOT EXISTS tasks_classification_idx ON tasks (classification)
+    `);
+    results.push("✓ tasks.classification_idx ready");
 
     await db.run(sql`
       CREATE TABLE IF NOT EXISTS timetable_events (

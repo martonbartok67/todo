@@ -15,27 +15,50 @@
  * go through the global fetch, not the custom fetch passed to createClient().
  */
 (function patchGlobalFetch() {
-  if ((globalThis as typeof globalThis & { __pollerBypassInstalled?: boolean }).__pollerBypassInstalled) return;
-  (globalThis as typeof globalThis & { __pollerBypassInstalled: boolean }).__pollerBypassInstalled = true;
+  const FLAG = "__pollerBypassInstalled";
+  const g = globalThis as typeof globalThis & { [FLAG]?: boolean };
 
-  const original = globalThis.fetch.bind(globalThis) as typeof fetch;
+  // We patch fetch EVERY time this module loads. Multiple patches just
+  // chain — the latest one is the outermost wrapper, so its /v1/jobs
+  // check runs first and returns 404 without ever reaching the inner
+  // fetch (which would call Turso and get a 400).
+  const previous = g[FLAG] ? (globalThis.fetch as typeof fetch) : null;
+  const original = (previous ?? globalThis.fetch).bind(globalThis) as typeof fetch;
 
   globalThis.fetch = ((input, init) => {
+    // Normalize the URL so we can match the @libsql/client migration poller
+    // regardless of whether the caller passed a string, a URL, or a Request.
     let urlStr: string;
-    if (typeof input === "string") {
-      urlStr = input;
-    } else if (input instanceof URL) {
-      urlStr = input.href;
-    } else {
-      urlStr = (input as Request).url;
+    try {
+      if (typeof input === "string") {
+        urlStr = input;
+      } else if (input instanceof URL) {
+        urlStr = input.href;
+      } else if (input && typeof input === "object" && "url" in input) {
+        urlStr = String((input as Request).url ?? "");
+      } else {
+        urlStr = "";
+      }
+    } catch {
+      urlStr = "";
     }
 
-    if (urlStr.includes("/v1/jobs")) {
+    // @libsql/client polls GET /v1/jobs before every execute() to wait for
+    // any in-flight migration. Turso returns 400 for that endpoint on
+    // databases that aren't running the Drizzle migration system, which
+    // trips the poller's error handler. We return 404 instead, which the
+    // client treats as "no migration in flight" and proceeds normally.
+    //
+    // We also match "/v2/jobs" in case the path changes in future
+    // @libsql/client versions.
+    if (urlStr && (urlStr.includes("/v1/jobs") || urlStr.includes("/v2/jobs"))) {
       return Promise.resolve(new Response(null, { status: 404 }));
     }
 
     return original(input, init);
   }) as typeof fetch;
+
+  g[FLAG] = true;
 })();
 
 import { createClient } from "@libsql/client";
@@ -65,26 +88,31 @@ const SCHEMA_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS courses_canvas_id_idx ON courses (canvas_id)`,
 
   `CREATE TABLE IF NOT EXISTS tasks (
-     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-     course_canvas_id TEXT NOT NULL,
-     canvas_id        TEXT NOT NULL,
-     source_type      TEXT NOT NULL,
-     title            TEXT NOT NULL,
-     item_type        TEXT,
-     due_at           TEXT,
-     points_possible  REAL,
-     url              TEXT,
-     description      TEXT,
-     completed_at     TEXT,
-     snoozed_until    TEXT,
-     last_synced_at   TEXT NOT NULL DEFAULT (datetime('now')),
-     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+     course_canvas_id      TEXT NOT NULL,
+     canvas_id             TEXT NOT NULL,
+     source_type           TEXT NOT NULL,
+     title                 TEXT NOT NULL,
+     item_type             TEXT,
+     due_at                TEXT,
+     points_possible       REAL,
+     url                   TEXT,
+     description           TEXT,
+     completed_at          TEXT,
+     snoozed_until         TEXT,
+     last_synced_at        TEXT NOT NULL DEFAULT (datetime('now')),
+     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+     -- Step 2: AI classification
+     classification        TEXT NOT NULL DEFAULT 'unclassified',
+     classification_reason TEXT,
+     classified_at         TEXT
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS tasks_canvas_source_idx ON tasks (canvas_id, source_type)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_course_idx    ON tasks (course_canvas_id)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_due_at_idx    ON tasks (due_at)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_completed_idx ON tasks (completed_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_course_idx        ON tasks (course_canvas_id)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_due_at_idx        ON tasks (due_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_completed_idx     ON tasks (completed_at)`,
+  `CREATE        INDEX IF NOT EXISTS tasks_classification_idx ON tasks (classification)`,
 
   `CREATE TABLE IF NOT EXISTS sync_log (
      id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +179,48 @@ const COLUMN_MIGRATIONS: Array<{ table: string; column: string; ddl: string }> =
     table:  "timetable_events",
     column: "source",
     ddl:    "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'",
+  },
+  // Step 2 — AI classification columns. Older DBs that pre-date this
+  // change need these ALTERs applied so new tasks land with the right
+  // default and existing tasks can be classified.
+  {
+    table:  "tasks",
+    column: "classification",
+    ddl:    "ALTER TABLE tasks ADD COLUMN classification TEXT NOT NULL DEFAULT 'unclassified'",
+  },
+  {
+    table:  "tasks",
+    column: "classification_reason",
+    ddl:    "ALTER TABLE tasks ADD COLUMN classification_reason TEXT",
+  },
+  {
+    table:  "tasks",
+    column: "classified_at",
+    ddl:    "ALTER TABLE tasks ADD COLUMN classified_at TEXT",
+  },
+  // Step 3 — structured syllabus columns on reading_items. The table
+  // itself is created by /api/migrate, but the column-level ALTERs
+  // also live here so the runtime bootstrap can self-heal a fresh
+  // / wiped DB that has the table but not the new columns.
+  {
+    table:  "reading_items",
+    column: "week_number",
+    ddl:    "ALTER TABLE reading_items ADD COLUMN week_number INTEGER",
+  },
+  {
+    table:  "reading_items",
+    column: "lecture_slot",
+    ddl:    "ALTER TABLE reading_items ADD COLUMN lecture_slot TEXT NOT NULL DEFAULT 'unknown'",
+  },
+  {
+    table:  "reading_items",
+    column: "source",
+    ddl:    "ALTER TABLE reading_items ADD COLUMN source TEXT NOT NULL DEFAULT 'ai'",
+  },
+  {
+    table:  "reading_items",
+    column: "lecture_date",
+    ddl:    "ALTER TABLE reading_items ADD COLUMN lecture_date TEXT",
   },
 ];
 
@@ -264,9 +334,14 @@ export function getDb(): DrizzleDB {
   const client = createClient({ url: url!, authToken: authToken! });
   _db = drizzle(client, { schema });
 
-  // Kick off schema bootstrap in the background. The first few requests
-  // might race with this, but CREATE TABLE IF NOT EXISTS is fast and
-  // idempotent. Callers that need the schema guaranteed can await dbReady().
+  // Kick off schema bootstrap in the background. CREATE TABLE IF NOT
+  // EXISTS is idempotent so the race is benign for fresh DBs, but
+  // column-level ALTERs (added for backward compat with older DBs)
+  // can race against the first query and produce 500s. Callers that
+  // need the schema to exist before the first query should await
+  // `dbReady()`. The page server components already do this implicitly
+  // via their data-fetching await — but the proxy here is sync, so we
+  // leave the comment in place and trust callers.
   _initPromise ??= ensureSchema().catch((err) => {
     _initPromise = null; // allow retry on next request
     throw err;

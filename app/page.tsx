@@ -1,9 +1,15 @@
 import { getPendingTasks, getPendingTasksByCourse, getCompletedTasks, getLastSyncStatus } from "@/lib/tasks";
+import { dbReady } from "@/lib/db";
 import TaskDashboard from "@/components/TaskDashboard";
+import { PageChrome } from "@/components/PageChrome";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  // Make sure schema is bootstrapped (new columns + indexes applied) before
+  // any read query. Without this, the very first request after a deploy
+  // races with the background ensureSchema() and hits "no such column".
+  await dbReady();
   const [pending, byCourse, completed, lastSync] = await Promise.all([
     getPendingTasks(),
     getPendingTasksByCourse(),
@@ -12,23 +18,13 @@ export default async function Home() {
   ]);
 
   return (
-    <main className="min-h-screen bg-[#0a0a0f] px-4 py-6 max-w-2xl mx-auto">
-      {/* Nav */}
-      <nav className="flex gap-2 mb-6">
-        <span className="text-[11px] font-medium text-white border-b border-[#6366f1] pb-0.5">Tasks</span>
-        <a href="/readings" className="text-[11px] text-[#6b7280] hover:text-white transition-colors pb-0.5">
-          Readings
-        </a>
-        <a href="/timetable" className="text-[11px] text-[#6b7280] hover:text-white transition-colors pb-0.5">
-          Timetable
-        </a>
-      </nav>
+    <PageChrome active="tasks">
       <TaskDashboard
         pending={pending}
         byCourse={byCourse}
         completed={completed}
         lastSync={lastSync ?? null}
       />
-    </main>
+    </PageChrome>
   );
 }

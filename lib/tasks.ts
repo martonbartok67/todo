@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { tasks, courses, syncLog } from "@/drizzle/schema";
-import { eq, isNull, isNotNull, desc, lte, and, or, gt } from "drizzle-orm";
+import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne } from "drizzle-orm";
 import type { Task } from "@/drizzle/schema";
 
 export type UrgencyLevel = "critical" | "high" | "medium" | "low" | "none";
@@ -44,7 +44,12 @@ async function fetchPendingRows() {
     .where(
       and(
         isNull(tasks.completedAt),
-        or(isNull(tasks.snoozedUntil), lte(tasks.snoozedUntil, now))
+        or(isNull(tasks.snoozedUntil), lte(tasks.snoozedUntil, now)),
+        // Step 2: hide "info" rows from the actionable task list. They
+        // live in the Resources tab instead. "unclassified" rows still
+        // appear — we don't want the list to be empty just because the
+        // AI hasn't run yet.
+        ne(tasks.classification, "info"),
       )
     );
 }
@@ -110,7 +115,13 @@ export async function getUpcomingDeadlines(): Promise<EnrichedTask[]> {
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
     .from(tasks)
     .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
-    .where(and(isNull(tasks.completedAt), isNotNull(tasks.dueAt), gt(tasks.dueAt, now), lte(tasks.dueAt, in48h)));
+    .where(and(
+      isNull(tasks.completedAt),
+      isNotNull(tasks.dueAt),
+      gt(tasks.dueAt, now),
+      lte(tasks.dueAt, in48h),
+      ne(tasks.classification, "info"),
+    ));
   return rows.map(({ task, courseName, accentColor }) => ({
     ...task,
     urgency:     getUrgency(task.dueAt),
@@ -133,6 +144,39 @@ export async function getCompletedTasks(): Promise<EnrichedTask[]> {
     urgency:     getUrgency(task.dueAt),
     courseName:  courseName ?? "Unknown Course",
     accentColor: accentColor ?? null,
+  }));
+}
+
+// ── Step 2: Resources (info-classified tasks) ───────────────────────────
+
+/**
+ * Resource = a Canvas item the AI classified as informational, not
+ * actionable. Same underlying row as a task — just shown in a different
+ * tab. We still compute `urgency` so the resources UI can sort by
+ * "recently added" or by due-date-when-relevant.
+ */
+export type EnrichedResource = Task & {
+  courseName:        string;
+  accentColor:       string | null;
+  classificationReason: string | null;
+};
+
+/**
+ * All resources across all courses, grouped by course.
+ * Sorted: most recently classified first within each course.
+ */
+export async function getInfoResources(): Promise<EnrichedResource[]> {
+  const rows = await db
+    .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
+    .from(tasks)
+    .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
+    .where(eq(tasks.classification, "info"))
+    .orderBy(desc(tasks.classifiedAt));
+  return rows.map(({ task, courseName, accentColor }) => ({
+    ...task,
+    courseName:           courseName ?? "Unknown Course",
+    accentColor:          accentColor ?? null,
+    classificationReason: task.classificationReason,
   }));
 }
 

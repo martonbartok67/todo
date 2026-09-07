@@ -8,7 +8,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       # Phase 1: pull courses + tasks only. Fast (~10–15s) and always
       # finishes well inside Vercel Hobby's 60s serverless ceiling.
@@ -116,3 +116,39 @@ jobs:
           body=$(echo "$response" | head -n -1)
           echo "Status: $code"
           echo "Body: $body"
+
+      # Phase 5: AI classification (Step 2). Only unclassified tasks are
+      # touched, so subsequent cron runs are no-ops unless new tasks land.
+      # We iterate ALL courses (not just AI-eligible ones) because
+      # classification is cheap and useful for every course — even
+      # onboarding boards occasionally have informational PDFs.
+      - name: AI-classify tasks per course
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL:     ${{ secrets.APP_URL }}
+        run: |
+          set -euo pipefail
+          ids='${{ steps.tasks.outputs.course_ids }}'
+          ids="${ids#[}"; ids="${ids%]}"; ids="${ids//\"/}"
+          IFS=',' read -ra ARR <<< "$ids"
+          if [ "${#ARR[@]}" -eq 0 ] || [ -z "${ARR[0]}" ]; then
+            echo "No courses — skipping classification phase."
+            exit 0
+          fi
+          for cid in "${ARR[@]}"; do
+            echo ""
+            echo "=========== classify course $cid ==========="
+            url="$APP_URL/api/sync?phase=classify&courseId=$cid"
+            response=$(curl -s -w "\n%{http_code}" -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$url" || true)
+            code=$(echo "$response" | tail -n 1)
+            body=$(echo "$response" | head -n -1)
+            echo "Status: $code"
+            echo "Body: $body"
+            if [ "$code" != "200" ]; then
+              echo "::warning::non-200 from classify phase for course $cid, continuing"
+            fi
+          done
+          echo ""
+          echo "Classification pass complete."
