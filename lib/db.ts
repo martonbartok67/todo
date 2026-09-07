@@ -139,10 +139,55 @@ const SCHEMA_STATEMENTS = [
 ];
 
 /**
+ * Column-level migrations to bring older tables in line with the current
+ * schema. Each entry is a column name; if the column is missing on the
+ * given table, the matching ALTER TABLE is run.
+ *
+ * Runs on every cold start (after SCHEMA_STATEMENTS). The PRAGMA + ALTER
+ * pair is fast (a few ms) and idempotent.
+ */
+const COLUMN_MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
+  {
+    table:  "timetable_events",
+    column: "source",
+    ddl:    "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'",
+  },
+];
+
+async function runColumnMigrations(baseHttps: string, authToken: string): Promise<void> {
+  for (const m of COLUMN_MIGRATIONS) {
+    // pragma_table_info() returns one row per column on the given
+    // table. Table + column names are hard-coded constants (not user
+    // input), so string interpolation is safe.
+    const rows = await queryRaw(
+      baseHttps,
+      authToken,
+      `SELECT name FROM pragma_table_info('${m.table}')`,
+    ).catch(() => []);
+    const names = new Set(rows.map((r) => String(r.name ?? "")));
+    if (!names.has(m.column)) {
+      await executeRaw(baseHttps, authToken, m.ddl);
+    }
+  }
+}
+
+/**
  * Send one statement to Turso via the HTTP pipeline API (bypassing
  * @libsql/client's migration-job poller, which runs via global fetch).
  */
 async function executeRaw(baseHttps: string, authToken: string, sql: string): Promise<void> {
+  await queryRaw(baseHttps, authToken, sql);
+}
+
+/**
+ * Send one statement and return the parsed result rows. Used for
+ * PRAGMA queries during schema bootstrap.
+ */
+async function queryRaw(
+  baseHttps: string,
+  authToken: string,
+  sql: string,
+): Promise<Array<Record<string, unknown>>> {
   const res = await fetch(`${baseHttps}/v2/pipeline`, {
     method: "POST",
     headers: {
@@ -160,6 +205,10 @@ async function executeRaw(baseHttps: string, authToken: string, sql: string): Pr
     const text = await res.text().catch(() => "");
     throw new Error(`Turso HTTP ${res.status} on bootstrap: ${sql.split("\n")[0]}\n${text}`);
   }
+  const body = (await res.json().catch(() => null)) as {
+    results?: Array<{ response?: { result?: { rows?: Array<Record<string, unknown>> } } }>;
+  } | null;
+  return body?.results?.[0]?.response?.result?.rows ?? [];
 }
 
 /**
@@ -181,6 +230,9 @@ async function ensureSchema(): Promise<void> {
   for (const sql of SCHEMA_STATEMENTS) {
     await executeRaw(baseHttps, authToken, sql);
   }
+  // Column-level migrations for older DBs that have the right tables
+  // but pre-date a later code change (e.g. timetable_events.source).
+  await runColumnMigrations(baseHttps, authToken);
 }
 
 /**

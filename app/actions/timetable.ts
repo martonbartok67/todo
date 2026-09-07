@@ -2,7 +2,7 @@
 /**
  * Server actions for timetable-related operations.
  */
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import { tasks, timetableEvents, userSettings } from "@/drizzle/schema";
 import { eq, and, isNull, gt, asc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -129,6 +129,11 @@ export async function saveIcalUrl(url: string, label: string | null): Promise<{
   }
 
   const now = new Date().toISOString();
+  // Make sure the schema is fully bootstrapped (including the column-
+  // level migrations for older DBs) before we touch any tables. Without
+  // this the first action invocation after deploy can race the
+  // background ensureSchema() and hit "no such column" errors.
+  await dbReady();
   await db
     .insert(userSettings)
     .values({ id: 1, icalUrl: trimmed, icalLabel: label, createdAt: now, updatedAt: now })
@@ -160,6 +165,7 @@ export async function saveIcalUrl(url: string, label: string | null): Promise<{
  */
 export async function clearIcalUrl(): Promise<{ removed: number }> {
   const now = new Date().toISOString();
+  await dbReady();
   await db
     .update(userSettings)
     .set({ icalUrl: null, icalLabel: null, updatedAt: now })
