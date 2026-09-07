@@ -137,18 +137,30 @@ export async function saveIcalUrl(url: string, label: string | null): Promise<{
     });
   revalidatePath("/timetable");
 
-  // Trigger an immediate sync by re-exporting the runner from sync.ts.
-  // We can't import it at the top because the route handler / the
-  // serverless function might be in a separate bundle; do a fetch call
-  // to the dedicated phase endpoint instead. This keeps the secret
-  // flow tight.
-  try {
-    const { runIcalSync } = await import("@/lib/canvas/sync");
-    const r = await runIcalSync();
-    return { status: "saved", synced: r.eventsUpserted, error: r.error };
-  } catch (err) {
-    return { status: "saved", synced: 0, error: String(err) };
+  // Trigger an immediate sync via the dedicated route endpoint. This
+  // avoids dynamic-importing the whole canvas sync module from inside
+  // a "use server" action (Next bundles server actions separately and
+  // that pattern breaks in some configs — the page ends up blank).
+  // The cron secret lives in the same Vercel project so this is safe.
+  const base = process.env.APP_URL || "";
+  const secret = process.env.CRON_SECRET || "";
+  if (base && secret) {
+    try {
+      const r = await fetch(`${base}/api/sync?phase=ical`, {
+        method:  "POST",
+        headers: { Authorization: `Bearer ${secret}` },
+        signal:  AbortSignal.timeout(45_000),
+      });
+      const body = (await r.json().catch(() => ({}))) as { eventsUpserted?: number; error?: string };
+      if (r.ok) {
+        return { status: "saved", synced: body.eventsUpserted ?? 0, error: body.error };
+      }
+      return { status: "saved", synced: 0, error: `sync returned ${r.status}: ${body.error ?? ""}` };
+    } catch (err) {
+      return { status: "saved", synced: 0, error: `sync fetch failed: ${String(err)}` };
+    }
   }
+  return { status: "saved", synced: 0, error: "saved; APP_URL/CRON_SECRET not configured, will sync on next cron tick" };
 }
 
 /**
