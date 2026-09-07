@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { courses, tasks, syncLog, readingItems, timetableEvents } from "@/drizzle/schema";
+import { courses, tasks, syncLog, readingItems, timetableEvents, userSettings } from "@/drizzle/schema";
 import { fetchAllPages } from "./client";
 import { assignmentToTask, moduleItemToTask, type CanvasAssignment, type CanvasModuleItem } from "./transform";
 import { extractReadings } from "./extract";
@@ -151,6 +151,9 @@ export async function runSync(): Promise<SyncResult> {
   // timetable view until the next run.
   await runTimetableSync().catch((err) => {
     console.error("runSync: runTimetableSync failed (continuing):", err);
+  });
+  await runIcalSync().catch((err) => {
+    console.error("runSync: runIcalSync failed (continuing):", err);
   });
 
   return {
@@ -674,4 +677,221 @@ export async function runTimetableSync(options: {
       error:          errorMessage,
     };
   }
+}
+
+/**
+ * Phase 4: fetch the user's iCal feed (e.g. from MyTimetable) and
+ * upsert events into `timetable_events` with `source = 'ical'`.
+ */
+export type IcalSyncResult = {
+  status:         "success" | "skipped" | "error";
+  eventsUpserted: number;
+  windowStart:    string;
+  windowEnd:      string;
+  durationMs:     number;
+  error?:         string;
+};
+
+export async function runIcalSync(): Promise<IcalSyncResult> {
+  const startedAt = Date.now();
+  const windowStart = new Date();
+  // iCal feeds usually cover a full year; the user may subscribe to a
+  // shorter window. Keep whatever they sent; expiry isn't our problem.
+  const windowEnd   = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+
+  try {
+    const rows = await db.select().from(userSettings).where(eq(userSettings.id, 1)).limit(1);
+    const settings = rows[0];
+    if (!settings?.icalUrl) {
+      return {
+        status: "skipped", eventsUpserted: 0,
+        windowStart: windowStart.toISOString(),
+        windowEnd:   windowEnd.toISOString(),
+        durationMs:  Date.now() - startedAt,
+        error: "no iCal URL configured — visit /timetable to paste one",
+      };
+    }
+
+    // Fetch the feed. Some servers reject default UAs; emulate a browser.
+    const res = await fetch(settings.icalUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (todo-aggregator; +https://github.com/martonbartok67/todo)",
+        "Accept":     "text/calendar, text/plain;q=0.9, */*;q=0.5",
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      throw new Error(`iCal feed returned ${res.status} ${res.statusText}`);
+    }
+    const ical = await res.text();
+    const events = parseIcal(ical);
+
+    if (events.length === 0) {
+      return {
+        status: "success", eventsUpserted: 0,
+        windowStart: windowStart.toISOString(),
+        windowEnd:   windowEnd.toISOString(),
+        durationMs:  Date.now() - startedAt,
+      };
+    }
+
+    // Best-effort course lookup: MyTimetable iCal exports often include
+    // a CATEGORIES property with the course code. We try to map that
+    // to a known course in our `courses` table.
+    const courseCodeByName = new Map<string, { id: string; name: string }>();
+    const knownCourses = await db.select({ id: courses.canvasId, name: courses.name, code: courses.courseCode })
+      .from(courses);
+    for (const c of knownCourses) {
+      if (c.code) courseCodeByName.set(c.code.toLowerCase(), { id: c.id, name: c.name });
+    }
+
+    let upserted = 0;
+    for (const e of events) {
+      const now = new Date().toISOString();
+      const cat = (e.categories ?? "").toLowerCase().split(/[,;]/).map((s) => s.trim()).filter(Boolean)[0] ?? "";
+      const matched = courseCodeByName.get(cat);
+
+      await db.insert(timetableEvents).values({
+        canvasId:       e.uid,
+        source:         "ical",
+        courseCanvasId: matched?.id ?? null,
+        courseName:     matched?.name ?? null,
+        title:          e.summary,
+        description:    e.description ?? null,
+        location:       e.location ?? null,
+        startAt:        e.start.toISOString(),
+        endAt:          e.end?.toISOString() ?? null,
+        allDay:         e.allDay,
+        eventType:      "event",
+        sourceUrl:      settings.icalUrl,
+        createdAt:      now,
+        updatedAt:      now,
+      }).onConflictDoUpdate({
+        target: timetableEvents.canvasId,
+        set: {
+          source:         "ical",
+          courseCanvasId: matched?.id ?? null,
+          courseName:     matched?.name ?? null,
+          title:          e.summary,
+          description:    e.description ?? null,
+          location:       e.location ?? null,
+          startAt:        e.start.toISOString(),
+          endAt:          e.end?.toISOString() ?? null,
+          allDay:         e.allDay,
+          eventType:      "event",
+          sourceUrl:      settings.icalUrl,
+          updatedAt:      now,
+        },
+      });
+      upserted++;
+    }
+
+    return {
+      status: "success", eventsUpserted: upserted,
+      windowStart: windowStart.toISOString(),
+      windowEnd:   windowEnd.toISOString(),
+      durationMs:  Date.now() - startedAt,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("runIcalSync failed:", err);
+    return {
+      status: "error", eventsUpserted: 0,
+      windowStart: windowStart.toISOString(),
+      windowEnd:   windowEnd.toISOString(),
+      durationMs:  Date.now() - startedAt,
+      error:       errorMessage,
+    };
+  }
+}
+
+/**
+ * Minimal iCal (RFC 5545) parser. Returns every VEVENT in the feed —
+ * the caller filters by date if it wants a window. We keep it simple
+ * and complete: line folding, common escape sequences, DATE vs
+ * DATE-TIME, TZID passthrough.
+ */
+type IcalEvent = {
+  uid:         string;
+  summary:     string;
+  start:       Date;
+  end:         Date | null;
+  allDay:      boolean;
+  location:    string | null;
+  description: string | null;
+  categories:  string | null;
+};
+
+function parseIcal(text: string): IcalEvent[] {
+  // Unfold lines: a line starting with space/tab continues the previous one.
+  const raw   = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
+  const lines = raw.split(/\r?\n/);
+
+  const events: IcalEvent[] = [];
+  let current: Partial<IcalEvent> | null = null;
+
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") { current = {}; continue; }
+    if (line === "END:VEVENT") {
+      if (current?.uid && current?.summary && current?.start) {
+        events.push({
+          uid:         current.uid,
+          summary:     current.summary,
+          start:       current.start,
+          end:         current.end ?? null,
+          allDay:      current.allDay ?? false,
+          location:    current.location ?? null,
+          description: current.description ?? null,
+          categories:  current.categories ?? null,
+        });
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+
+    const colon = line.indexOf(":");
+    if (colon < 0) continue;
+    const name  = line.slice(0, colon);
+    const value = line.slice(colon + 1);
+    const semi  = name.indexOf(";");
+    const prop  = (semi < 0 ? name : name.slice(0, semi)).toUpperCase();
+
+    switch (prop) {
+      case "UID":         current.uid = unescapeIcal(value); break;
+      case "SUMMARY":     current.summary = unescapeIcal(value); break;
+      case "DTSTART":
+        current.start  = parseIcalDate(value, name);
+        current.allDay = /VALUE=DATE(?!-)/i.test(name);
+        break;
+      case "DTEND":       current.end = parseIcalDate(value, name); break;
+      case "LOCATION":    current.location = unescapeIcal(value); break;
+      case "DESCRIPTION": current.description = unescapeIcal(value); break;
+      case "CATEGORIES":  current.categories = unescapeIcal(value); break;
+    }
+  }
+  return events;
+}
+
+function unescapeIcal(s: string): string {
+  return s
+    .replace(/\\n/g, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\");
+}
+
+function parseIcalDate(value: string, fullName: string): Date {
+  // DATE only: YYYYMMDD → start of day UTC
+  if (/^\d{8}$/.test(value)) {
+    return new Date(`${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T00:00:00Z`);
+  }
+  // DATE-TIME with Z (UTC) or with TZID (floating, treated as server-local
+  // — for EUR that means CET/CEST which is what the user's browser shows
+  // anyway since most EUR machines run in CET).
+  const m = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11)}:${value.slice(11, 13)}:${value.slice(13, 15)}`;
+  if (value.endsWith("Z")) {
+    return new Date(`${m}.000Z`);
+  }
+  return new Date(m); // server-local time
 }

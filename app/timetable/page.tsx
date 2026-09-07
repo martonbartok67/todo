@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { timetableEvents, tasks, courses } from "@/drizzle/schema";
+import { timetableEvents, tasks, courses, userSettings } from "@/drizzle/schema";
 import { asc, gte, isNull, and, eq, sql } from "drizzle-orm";
 import TimetableDashboard from "@/components/TimetableDashboard";
 import type { TimetableEvent } from "@/drizzle/schema";
@@ -33,6 +33,15 @@ export default async function TimetablePage() {
     undatedCount = Number(rows[0]?.n ?? 0);
   } catch {}
 
+  // Current iCal configuration (if any)
+  let icalUrl: string | null = null;
+  let icalLabel: string | null = null;
+  try {
+    const rows = await db.select().from(userSettings).where(eq(userSettings.id, 1)).limit(1);
+    icalUrl   = rows[0]?.icalUrl   ?? null;
+    icalLabel = rows[0]?.icalLabel ?? null;
+  } catch {}
+
   return (
     <main className="min-h-screen bg-[#0a0a0f] px-4 py-6 max-w-2xl mx-auto">
       <nav className="flex gap-2 mb-6">
@@ -44,7 +53,12 @@ export default async function TimetablePage() {
         </a>
         <span className="text-[11px] font-medium text-white border-b border-[#6366f1] pb-0.5">Timetable</span>
       </nav>
-      <TimetableDashboard events={events} undatedTaskCount={undatedCount} />
+      <TimetableDashboard
+        events={events}
+        undatedTaskCount={undatedCount}
+        icalUrl={icalUrl}
+        icalLabel={icalLabel}
+      />
     </main>
   );
 }

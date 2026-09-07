@@ -62,17 +62,21 @@ export const pushSubscriptions = sqliteTable("push_subscriptions", {
 }));
 
 /**
- * Calendar / timetable entries pulled from Canvas `/calendar_events`. Used
- * to infer deadlines for tasks that Canvas itself doesn't expose a due date
- * for (e.g. workshop activities, lectures) and to render a class schedule.
+ * Calendar / timetable entries pulled from Canvas `/calendar_events` or
+ * a personal iCal feed (e.g. MyTimetable). Used to infer deadlines for
+ * tasks that Canvas itself doesn't expose a due date for (e.g. workshop
+ * activities, lectures) and to render a class schedule.
  *
- * `canvasId` is the global Canvas calendar event id; the same physical
- * event re-pulled on the next sync should hit the unique index and just
- * update mutable fields (title / location / start_at / end_at).
+ * `canvasId` is the source-specific unique id:
+ *   - "canvas" source: the Canvas calendar event id
+ *   - "ical" source:    the iCal VEVENT UID
+ * The same physical event re-pulled on the next sync should hit the
+ * unique index and just update mutable fields.
  */
 export const timetableEvents = sqliteTable("timetable_events", {
   id:           integer("id").primaryKey({ autoIncrement: true }),
   canvasId:     text("canvas_id").notNull(),
+  source:       text("source", { enum: ["canvas", "ical"] }).notNull().default("canvas"),
   courseCanvasId: text("course_canvas_id"), // null for personal events
   courseName:   text("course_name"),
   title:        text("title").notNull(),
@@ -90,6 +94,19 @@ export const timetableEvents = sqliteTable("timetable_events", {
   startAtIdx:  index("timetable_events_start_at_idx").on(t.startAt),
   courseIdx:   index("timetable_events_course_idx").on(t.courseCanvasId),
 }));
+
+/**
+ * Single-row user settings. We don't have auth yet, so this is just one
+ * row; the schema supports a future move to per-user settings without a
+ * migration.
+ */
+export const userSettings = sqliteTable("user_settings", {
+  id:         integer("id").primaryKey(), // always 1
+  icalUrl:    text("ical_url"),
+  icalLabel:  text("ical_label"),
+  createdAt:  text("created_at").notNull().default(sql`(datetime('now'))`),
+  updatedAt:  text("updated_at").notNull().default(sql`(datetime('now'))`),
+});
 
 /**
  * AI-extracted reading items from course syllabi / manuals.
@@ -129,5 +146,7 @@ export type PushSubscription   = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 export type TimetableEvent      = typeof timetableEvents.$inferSelect;
 export type NewTimetableEvent   = typeof timetableEvents.$inferInsert;
+export type UserSettings        = typeof userSettings.$inferSelect;
+export type NewUserSettings     = typeof userSettings.$inferInsert;
 export type ReadingItem        = typeof readingItems.$inferSelect;
 export type NewReadingItem     = typeof readingItems.$inferInsert;

@@ -2,11 +2,12 @@
  * POST /api/sync                          — full sync (will likely hit Vercel Hobby 60s cap)
  * POST /api/sync?phase=tasks               — pull courses + tasks only (fast, ~10-15s)
  * POST /api/sync?phase=ai&courseId=…      — extract readings for one course
- * POST /api/sync?phase=timetable           — pull upcoming calendar events
+ * POST /api/sync?phase=timetable           — pull Canvas calendar events
+ * POST /api/sync?phase=ical                — pull iCal feed (MyTimetable)
  * GET  /api/sync?secret=…                  — verbose diagnostic mode (browser test)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { runSync, runTaskSync, runAIForCourse, runTimetableSync } from "@/lib/canvas/sync";
+import { runSync, runTaskSync, runAIForCourse, runTimetableSync, runIcalSync } from "@/lib/canvas/sync";
 import { dbReady } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -57,13 +58,18 @@ async function handlePost(req: NextRequest) {
     return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
   }
 
+  if (phase === "ical") {
+    const result = await runIcalSync();
+    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
+  }
+
   if (phase === "full") {
     const result = await runSync();
     return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
   }
 
   return NextResponse.json(
-    { error: `Unknown phase "${phase}". Use one of: tasks, ai, timetable, full.` },
+    { error: `Unknown phase "${phase}". Use one of: tasks, ai, timetable, ical, full.` },
     { status: 400 }
   );
 }

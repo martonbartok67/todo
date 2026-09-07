@@ -3,8 +3,8 @@
  * Server actions for timetable-related operations.
  */
 import { db } from "@/lib/db";
-import { tasks, timetableEvents } from "@/drizzle/schema";
-import { eq, and, isNull, gt, asc } from "drizzle-orm";
+import { tasks, timetableEvents, userSettings } from "@/drizzle/schema";
+import { eq, and, isNull, gt, asc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -108,4 +108,75 @@ function pickBestEvent<T extends { title: string; startAt: string }>(
     }
   }
   return best;
+}
+
+/**
+ * Save the user's iCal feed URL. Triggers an immediate sync so the user
+ * sees the events without waiting for the next cron tick.
+ */
+export async function saveIcalUrl(url: string, label: string | null): Promise<{
+  status:  "saved" | "error";
+  synced:  number;
+  error?:  string;
+}> {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return { status: "error", synced: 0, error: "URL is empty" };
+  }
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return { status: "error", synced: 0, error: "URL must start with http:// or https://" };
+  }
+
+  const now = new Date().toISOString();
+  await db
+    .insert(userSettings)
+    .values({ id: 1, icalUrl: trimmed, icalLabel: label, createdAt: now, updatedAt: now })
+    .onConflictDoUpdate({
+      target: userSettings.id,
+      set: { icalUrl: trimmed, icalLabel: label, updatedAt: now },
+    });
+  revalidatePath("/timetable");
+
+  // Trigger an immediate sync by re-exporting the runner from sync.ts.
+  // We can't import it at the top because the route handler / the
+  // serverless function might be in a separate bundle; do a fetch call
+  // to the dedicated phase endpoint instead. This keeps the secret
+  // flow tight.
+  try {
+    const { runIcalSync } = await import("@/lib/canvas/sync");
+    const r = await runIcalSync();
+    return { status: "saved", synced: r.eventsUpserted, error: r.error };
+  } catch (err) {
+    return { status: "saved", synced: 0, error: String(err) };
+  }
+}
+
+/**
+ * Clear the user's iCal URL (and remove any iCal-sourced events).
+ */
+export async function clearIcalUrl(): Promise<{ removed: number }> {
+  const now = new Date().toISOString();
+  await db
+    .update(userSettings)
+    .set({ icalUrl: null, icalLabel: null, updatedAt: now })
+    .where(eq(userSettings.id, 1));
+  // Drop all iCal events. Canvas events are unaffected.
+  const r = await db
+    .delete(timetableEvents)
+    .where(eq(timetableEvents.source, "ical"))
+    .returning({ id: timetableEvents.id });
+  revalidatePath("/timetable");
+  return { removed: r.length };
+}
+
+/**
+ * Read the current iCal URL (or null if not configured). Used by the
+ * /timetable page to pre-fill the form.
+ */
+export async function getIcalSettings(): Promise<{ url: string | null; label: string | null }> {
+  const rows = await db.select().from(userSettings).where(eq(userSettings.id, 1)).limit(1);
+  return {
+    url:   rows[0]?.icalUrl   ?? null,
+    label: rows[0]?.icalLabel ?? null,
+  };
 }

@@ -110,6 +110,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS timetable_events (
      id                INTEGER PRIMARY KEY AUTOINCREMENT,
      canvas_id         TEXT NOT NULL,
+     source            TEXT NOT NULL DEFAULT 'canvas',
      course_canvas_id  TEXT,
      course_name       TEXT,
      title             TEXT NOT NULL,
@@ -126,6 +127,15 @@ const SCHEMA_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS timetable_events_canvas_id_idx ON timetable_events (canvas_id)`,
   `CREATE        INDEX IF NOT EXISTS timetable_events_start_at_idx ON timetable_events (start_at)`,
   `CREATE        INDEX IF NOT EXISTS timetable_events_course_idx   ON timetable_events (course_canvas_id)`,
+
+  `CREATE TABLE IF NOT EXISTS user_settings (
+     id         INTEGER PRIMARY KEY,
+     ical_url   TEXT,
+     ical_label TEXT,
+     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+   )`,
+  `INSERT OR IGNORE INTO user_settings (id, ical_url, ical_label) VALUES (1, NULL, NULL)`,
 ];
 
 /**

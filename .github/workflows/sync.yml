@@ -83,13 +83,31 @@ jobs:
       # view. The user's Canvas calendar is often empty (the EUR feeds
       # MyTimetables data into Canvas but only after the term is live), so
       # this is best-effort. Failures don't break the workflow.
-      - name: Sync timetable
+      - name: Sync Canvas timetable
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           APP_URL:     ${{ secrets.APP_URL }}
         run: |
           set -euo pipefail
           url="$APP_URL/api/sync?phase=timetable&weeks=4"
+          echo "---- POST $url ----"
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$url" || true)
+          code=$(echo "$response" | tail -n 1)
+          body=$(echo "$response" | head -n -1)
+          echo "Status: $code"
+          echo "Body: $body"
+
+      # Phase 4: pull the user's iCal feed (e.g. from MyTimetable) if one
+      # is configured. Skipped silently otherwise.
+      - name: Sync iCal feed
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL:     ${{ secrets.APP_URL }}
+        run: |
+          set -euo pipefail
+          url="$APP_URL/api/sync?phase=ical"
           echo "---- POST $url ----"
           response=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Authorization: Bearer $CRON_SECRET" \

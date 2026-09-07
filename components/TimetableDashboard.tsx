@@ -1,19 +1,12 @@
 "use client";
 import { useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { attachTimetableDeadlines } from "@/app/actions/timetable";
+import {
+  attachTimetableDeadlines,
+  saveIcalUrl,
+  clearIcalUrl,
+} from "@/app/actions/timetable";
 import type { TimetableEvent } from "@/drizzle/schema";
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function groupByDay(events: TimetableEvent[]): Map<string, TimetableEvent[]> {
   const out = new Map<string, TimetableEvent[]>();
@@ -43,21 +36,53 @@ function fallbackColor(name: string): string {
 export default function TimetableDashboard({
   events,
   undatedTaskCount,
+  icalUrl,
+  icalLabel,
 }: {
   events: TimetableEvent[];
   undatedTaskCount: number;
+  icalUrl: string | null;
+  icalLabel: string | null;
 }) {
-  const [isPending, startTransition] = useTransition();
-  const [result, setResult] = useState<string | null>(null);
+  const [isAttaching, startAttach] = useTransition();
+  const [attachResult, setAttachResult] = useState<string | null>(null);
+
+  const [icalInput, setIcalInput]       = useState(icalUrl ?? "");
+  const [icalLabelInput, setIcalLabel] = useState(icalLabel ?? "");
+  const [isSaving, startSave]          = useTransition();
+  const [isClearing, startClear]       = useTransition();
+  const [saveResult, setSaveResult]     = useState<string | null>(null);
+
   const byDay = groupByDay(events);
 
   function handleAttach() {
-    startTransition(async () => {
+    startAttach(async () => {
       const r = await attachTimetableDeadlines();
-      setResult(
+      setAttachResult(
         `Attached ${r.matched} of ${r.matched + r.noEvents} tasks. ` +
         `${r.noEvents} couldn't find a matching event.`
       );
+    });
+  }
+
+  function handleSave() {
+    startSave(async () => {
+      const r = await saveIcalUrl(icalInput, icalLabelInput || null);
+      if (r.status === "error") {
+        setSaveResult(`Error: ${r.error}`);
+      } else {
+        setSaveResult(`Saved. Synced ${r.synced} events.${r.error ? " (sync error: " + r.error + ")" : ""}`);
+      }
+    });
+  }
+
+  function handleClear() {
+    if (!confirm("Remove the iCal feed and delete all iCal-sourced events? Canvas events are unaffected.")) return;
+    startClear(async () => {
+      const r = await clearIcalUrl();
+      setSaveResult(`Cleared. Removed ${r.removed} events.`);
+      setIcalInput("");
+      setIcalLabel("");
     });
   }
 
@@ -74,8 +99,56 @@ export default function TimetableDashboard({
         </div>
       </header>
 
+      {/* iCal feed configuration */}
+      <section className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-3 mb-5">
+        <p className="text-sm text-white">MyTimetable iCal feed</p>
+        <p className="text-[11px] text-[#6b7280] mt-0.5">
+          In MyTimetable, click your name → <em>Subscribe</em> → copy the
+          calendar URL (looks like <code className="text-[#6366f1]">https://timetables.eur.nl/...</code>)
+          and paste it here. We pull it every hour and store the events
+          alongside any Canvas-sourced ones.
+        </p>
+        <div className="mt-3 space-y-2">
+          <input
+            type="url"
+            value={icalInput}
+            onChange={(e) => setIcalInput(e.target.value)}
+            placeholder="https://timetables.eur.nl/..."
+            className="w-full text-[12px] bg-[#0a0a0f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-white placeholder-[#4b5563] focus:outline-none focus:border-[#6366f1]"
+          />
+          <input
+            type="text"
+            value={icalLabelInput}
+            onChange={(e) => setIcalLabel(e.target.value)}
+            placeholder="Label (optional) e.g. 'My RSM schedule'"
+            className="w-full text-[12px] bg-[#0a0a0f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-white placeholder-[#4b5563] focus:outline-none focus:border-[#6366f1]"
+          />
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              disabled={isSaving || !icalInput.trim()}
+              onClick={handleSave}
+              className="text-[11px] text-white bg-[#6366f1] hover:bg-[#4f46e5] disabled:opacity-40 transition-colors rounded-lg px-3 py-1.5"
+            >
+              {isSaving ? "Saving…" : "Save & sync"}
+            </button>
+            {icalUrl && (
+              <button
+                disabled={isClearing}
+                onClick={handleClear}
+                className="text-[11px] text-[#ef4444] hover:text-white border border-[#2a2a3a] hover:border-[#ef4444] transition-colors rounded-lg px-3 py-1.5"
+              >
+                {isClearing ? "Clearing…" : "Remove feed"}
+              </button>
+            )}
+            {saveResult && (
+              <p className="text-[11px] text-[#10b981] flex-1">{saveResult}</p>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* Action: attach timetable deadlines to undated tasks */}
-      {undatedTaskCount > 0 && (
+      {undatedTaskCount > 0 && events.length > 0 && (
         <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-3 mb-5">
           <p className="text-sm text-white">
             {undatedTaskCount} undated task{undatedTaskCount === 1 ? "" : "s"}
@@ -85,29 +158,29 @@ export default function TimetableDashboard({
           </p>
           <div className="flex items-center gap-2 mt-2.5">
             <button
-              disabled={isPending}
+              disabled={isAttaching}
               onClick={handleAttach}
               className="text-[11px] text-white bg-[#6366f1] hover:bg-[#4f46e5] disabled:opacity-40 transition-colors rounded-lg px-3 py-1.5"
             >
-              {isPending ? "Working…" : "Attach timetable deadlines"}
+              {isAttaching ? "Working…" : "Attach timetable deadlines"}
             </button>
-            {result && (
-              <p className="text-[11px] text-[#10b981] flex-1">{result}</p>
+            {attachResult && (
+              <p className="text-[11px] text-[#10b981] flex-1">{attachResult}</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Empty state */}
-      {events.length === 0 && (
+      {/* Empty state — only show if no events and no iCal configured */}
+      {events.length === 0 && !icalUrl && (
         <div className="rounded-xl bg-[#111118] border border-[#2a2a3a] px-4 py-5 text-sm text-[#6b7280]">
           <p className="text-white font-medium mb-1">No calendar events found</p>
           <p>
-            Canvas returned an empty calendar. The EUR usually populates this
-            feed from MyTimetables once your courses are live — try again
-            after the term starts.
+            Canvas returned an empty calendar and you haven't set up an iCal
+            feed yet. The EUR usually populates Canvas once your courses are
+            live; meanwhile, paste your MyTimetable iCal URL above to get
+            started.
           </p>
-          <p className="mt-2 text-[11px]">Trigger a sync with <code className="text-[#6366f1]">?phase=timetable</code> to refresh.</p>
         </div>
       )}
 
@@ -137,7 +210,12 @@ export default function TimetableDashboard({
                         </p>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm text-white leading-snug">{e.title}</p>
+                        <p className="text-sm text-white leading-snug">
+                          {e.title}
+                          {e.source === "ical" && (
+                            <span className="ml-1.5 text-[9px] uppercase tracking-wider text-[#06b6d4]">iCal</span>
+                          )}
+                        </p>
                         {e.courseName && (
                           <p className="text-[11px] mt-0.5 flex items-center gap-1.5">
                             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accent }} />
@@ -148,7 +226,7 @@ export default function TimetableDashboard({
                           <p className="text-[11px] text-[#6b7280] mt-0.5">📍 {e.location}</p>
                         )}
                       </div>
-                      {e.sourceUrl && (
+                      {e.sourceUrl && e.sourceUrl.startsWith("http") && (
                         <a href={e.sourceUrl} target="_blank" rel="noopener noreferrer"
                           className="shrink-0 text-[#6b7280] hover:text-white transition-colors mt-0.5 text-xs">↗</a>
                       )}

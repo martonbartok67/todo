@@ -81,6 +81,28 @@ export async function GET(req: NextRequest) {
     `);
     results.push("✓ timetable_events indexes ready");
 
+    // Add the new "source" column to existing timetable_events rows that
+    // pre-date the iCal support. Safe no-op if the column already exists
+    // because we use a CASE-based check via pragma.
+    const cols = (await db.all(sql`PRAGMA table_info(timetable_events)`)) as Array<{ name: string }>;
+    const hasSource = cols.some((c) => c.name === "source");
+    if (!hasSource) {
+      await db.run(sql`ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'`);
+      results.push("✓ timetable_events.source column added");
+    }
+
+    await db.run(sql`
+      CREATE TABLE IF NOT EXISTS user_settings (
+        id         INTEGER PRIMARY KEY,
+        ical_url   TEXT,
+        ical_label TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    await db.run(sql`INSERT OR IGNORE INTO user_settings (id) VALUES (1)`);
+    results.push("✓ user_settings table ready");
+
     const tables = await db.run(sql`
       SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
     `);
