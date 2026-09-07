@@ -287,14 +287,24 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
     }),
   ];
 
-  for (const task of newTasks) {
-    await db.insert(tasks).values(task).onConflictDoUpdate({
+  if (newTasks.length > 0) {
+    const nowIso = new Date().toISOString();
+    // Single bulk insert instead of one round-trip per row.
+    // Vercel Hobby has a 60s function ceiling; with ~600 tasks per sync the
+    // per-row variant took ~60s by itself, blowing the cap before the AI
+    // phase ever ran. Drizzle's `.values([...])` + onConflictDoUpdate
+    // produces one Turso HTTP call covering the whole course.
+    await db.insert(tasks).values(newTasks).onConflictDoUpdate({
       target: [tasks.canvasId, tasks.sourceType],
       set: {
-        title: task.title, itemType: task.itemType, dueAt: task.dueAt,
-        pointsPossible: task.pointsPossible, url: task.url,
-        description: task.description, lastSyncedAt: task.lastSyncedAt,
-        updatedAt: new Date().toISOString(),
+        title:          sql`excluded.title`,
+        itemType:       sql`excluded.item_type`,
+        dueAt:          sql`excluded.due_at`,
+        pointsPossible: sql`excluded.points_possible`,
+        url:            sql`excluded.url`,
+        description:    sql`excluded.description`,
+        lastSyncedAt:   sql`excluded.last_synced_at`,
+        updatedAt:      nowIso,
       },
     });
   }
