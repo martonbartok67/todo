@@ -63,23 +63,34 @@ Page title: ${pageTitle}
 Document text:
 ${text}
 
-This may be a lecture schedule, module overview, or course manual. It may use:
+This may be a lecture schedule, module overview, course manual, or a
+synthetic "module structure" page that lists a Canvas module's items
+(prefixed with [ExternalUrl], [File], [Page], [Quiz], etc.).
+
+The course may use:
 - Week numbers (e.g. "Week 36", "wk36") with lecture topics and chapter references
 - Module numbers (e.g. "Module 1 - Introduction (wk36)") with chapter numbers
 - Simple chapter references like "Chapters 1 & 3" or "Chapter 6"
 - Topics like "What is OB? Introduction" paired with preparation material
+- Module structure: a "Module N: <topic>" header with a list of items
+  underneath. Each such module is itself a lecture/session, even if the
+  page does not name chapters explicitly.
 
-Extract every lecture/module/session that has associated reading or preparation material.
+Extract every lecture/module/session that has associated reading or
+preparation material. If a module structure is present and the module
+name describes a topic, treat the whole module as one reading entry
+(the items inside it are the supporting material — list them in detail).
 
 Return ONLY a JSON array. Each element must have exactly these keys:
-- "lectureLabel": string — combine week+lecture info, e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
-- "readingText": string — the chapter/reading reference, e.g. "Chapters 1 & 3" or "Chapter 5 — Cultural Frameworks"
-- "detail": string or null — the lecture topic or extra note, e.g. "What is OB? Introduction to the field"
+- "lectureLabel": string — combine week+lecture info, e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)" or "Module 4: Cultural and institutional frameworks"
+- "readingText": string — the chapter/reading reference OR the module topic itself if no explicit chapter is listed, e.g. "Chapters 1 & 3" or "Chapter 5 — Cultural Frameworks" or "Module 4: Cultural and institutional frameworks"
+- "detail": string or null — the lecture topic or extra note, e.g. "What is OB? Introduction to the field" or "Welcome / 4.1 What are institutions? / 4.2 What are institutions? Culture"
 
 Rules:
 - One entry per lecture/module per reading reference
 - If a module lists multiple chapters, create one entry per chapter
-- If there is no reading for a session, skip it
+- If a module has a clear topic but no explicit reading, still create one entry with the module name as the readingText and a short detail that lists the sub-items
+- Skip pure quizzes / assignment-submission items that have no reading
 - If the page contains no structured reading/preparation content at all, return []
 - Return only the JSON array, no markdown, no explanation`;
 

@@ -1,11 +1,12 @@
 /**
- * POST /api/sync                       — full sync (will likely hit Vercel Hobby 60s cap)
- * POST /api/sync?phase=tasks            — pull courses + tasks only (fast, ~10-15s)
- * POST /api/sync?phase=ai&courseId=…   — extract readings for one course
- * GET  /api/sync?secret=…              — verbose diagnostic mode (browser test)
+ * POST /api/sync                          — full sync (will likely hit Vercel Hobby 60s cap)
+ * POST /api/sync?phase=tasks               — pull courses + tasks only (fast, ~10-15s)
+ * POST /api/sync?phase=ai&courseId=…      — extract readings for one course
+ * POST /api/sync?phase=timetable           — pull upcoming calendar events
+ * GET  /api/sync?secret=…                  — verbose diagnostic mode (browser test)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { runSync, runTaskSync, runAIForCourse } from "@/lib/canvas/sync";
+import { runSync, runTaskSync, runAIForCourse, runTimetableSync } from "@/lib/canvas/sync";
 import { dbReady } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -49,13 +50,20 @@ async function handlePost(req: NextRequest) {
     return NextResponse.json(result, { status: 200 });
   }
 
+  if (phase === "timetable") {
+    const weeksRaw = req.nextUrl.searchParams.get("weeks");
+    const weeks = weeksRaw !== null ? Math.max(1, Math.min(12, parseInt(weeksRaw, 10) || 4)) : 4;
+    const result = await runTimetableSync({ weeks });
+    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
+  }
+
   if (phase === "full") {
     const result = await runSync();
     return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
   }
 
   return NextResponse.json(
-    { error: `Unknown phase "${phase}". Use one of: tasks, ai, full.` },
+    { error: `Unknown phase "${phase}". Use one of: tasks, ai, timetable, full.` },
     { status: 400 }
   );
 }

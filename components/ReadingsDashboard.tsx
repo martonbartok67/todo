@@ -57,10 +57,6 @@ export default function ReadingsDashboard({
               : "AI-extracted from course manuals"}
           </p>
         </div>
-        <a href="/"
-          className="text-[11px] text-[#6b7280] hover:text-white transition-colors border border-[#2a2a3a] rounded-lg px-2.5 py-1">
-          ← Tasks
-        </a>
       </header>
 
       {/* Table not ready */}

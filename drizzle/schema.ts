@@ -62,6 +62,36 @@ export const pushSubscriptions = sqliteTable("push_subscriptions", {
 }));
 
 /**
+ * Calendar / timetable entries pulled from Canvas `/calendar_events`. Used
+ * to infer deadlines for tasks that Canvas itself doesn't expose a due date
+ * for (e.g. workshop activities, lectures) and to render a class schedule.
+ *
+ * `canvasId` is the global Canvas calendar event id; the same physical
+ * event re-pulled on the next sync should hit the unique index and just
+ * update mutable fields (title / location / start_at / end_at).
+ */
+export const timetableEvents = sqliteTable("timetable_events", {
+  id:           integer("id").primaryKey({ autoIncrement: true }),
+  canvasId:     text("canvas_id").notNull(),
+  courseCanvasId: text("course_canvas_id"), // null for personal events
+  courseName:   text("course_name"),
+  title:        text("title").notNull(),
+  description:  text("description"),
+  location:     text("location"),
+  startAt:      text("start_at").notNull(),
+  endAt:        text("end_at"),
+  allDay:       integer("all_day", { mode: "boolean" }).notNull().default(false),
+  eventType:    text("event_type"), // "event" | "assignment" | "calendar"
+  sourceUrl:    text("source_url"),
+  createdAt:    text("created_at").notNull().default(sql`(datetime('now'))`),
+  updatedAt:    text("updated_at").notNull().default(sql`(datetime('now'))`),
+}, (t) => ({
+  canvasIdIdx: uniqueIndex("timetable_events_canvas_id_idx").on(t.canvasId),
+  startAtIdx:  index("timetable_events_start_at_idx").on(t.startAt),
+  courseIdx:   index("timetable_events_course_idx").on(t.courseCanvasId),
+}));
+
+/**
  * AI-extracted reading items from course syllabi / manuals.
  * One row per reading entry (e.g. "Week 3 — Chapter 4, Smith 2019").
  * Unique on (courseCanvasId, lectureLabel, readingText) to allow safe upsert.
@@ -97,5 +127,7 @@ export type SyncLog            = typeof syncLog.$inferSelect;
 export type NewSyncLog         = typeof syncLog.$inferInsert;
 export type PushSubscription   = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
+export type TimetableEvent      = typeof timetableEvents.$inferSelect;
+export type NewTimetableEvent   = typeof timetableEvents.$inferInsert;
 export type ReadingItem        = typeof readingItems.$inferSelect;
 export type NewReadingItem     = typeof readingItems.$inferInsert;

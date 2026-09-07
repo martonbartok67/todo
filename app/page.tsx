@@ -19,6 +19,9 @@ export default async function Home() {
         <a href="/readings" className="text-[11px] text-[#6b7280] hover:text-white transition-colors pb-0.5">
           Readings
         </a>
+        <a href="/timetable" className="text-[11px] text-[#6b7280] hover:text-white transition-colors pb-0.5">
+          Timetable
+        </a>
       </nav>
       <TaskDashboard
         pending={pending}

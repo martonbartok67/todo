@@ -47,6 +47,40 @@ export async function GET(req: NextRequest) {
     `);
     results.push("✓ course index ready");
 
+    await db.run(sql`
+      CREATE TABLE IF NOT EXISTS timetable_events (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        canvas_id        TEXT NOT NULL,
+        course_canvas_id TEXT,
+        course_name      TEXT,
+        title            TEXT NOT NULL,
+        description      TEXT,
+        location         TEXT,
+        start_at         TEXT NOT NULL,
+        end_at           TEXT,
+        all_day          INTEGER NOT NULL DEFAULT 0,
+        event_type       TEXT,
+        source_url       TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    results.push("✓ timetable_events table ready");
+
+    await db.run(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS timetable_events_canvas_id_idx
+      ON timetable_events (canvas_id)
+    `);
+    await db.run(sql`
+      CREATE INDEX IF NOT EXISTS timetable_events_start_at_idx
+      ON timetable_events (start_at)
+    `);
+    await db.run(sql`
+      CREATE INDEX IF NOT EXISTS timetable_events_course_idx
+      ON timetable_events (course_canvas_id)
+    `);
+    results.push("✓ timetable_events indexes ready");
+
     const tables = await db.run(sql`
       SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
     `);

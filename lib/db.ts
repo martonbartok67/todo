@@ -106,6 +106,26 @@ const SCHEMA_STATEMENTS = [
      created_at TEXT NOT NULL DEFAULT (datetime('now'))
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS push_endpoint_idx ON push_subscriptions (endpoint)`,
+
+  `CREATE TABLE IF NOT EXISTS timetable_events (
+     id                INTEGER PRIMARY KEY AUTOINCREMENT,
+     canvas_id         TEXT NOT NULL,
+     course_canvas_id  TEXT,
+     course_name       TEXT,
+     title             TEXT NOT NULL,
+     description       TEXT,
+     location          TEXT,
+     start_at          TEXT NOT NULL,
+     end_at            TEXT,
+     all_day           INTEGER NOT NULL DEFAULT 0,
+     event_type        TEXT,
+     source_url        TEXT,
+     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS timetable_events_canvas_id_idx ON timetable_events (canvas_id)`,
+  `CREATE        INDEX IF NOT EXISTS timetable_events_start_at_idx ON timetable_events (start_at)`,
+  `CREATE        INDEX IF NOT EXISTS timetable_events_course_idx   ON timetable_events (course_canvas_id)`,
 ];
 
 /**

@@ -29,23 +29,25 @@ jobs:
           [ "$code" = "200" ] || exit 1
           # Stash courseIds for the next step.
           echo "$body" > tasks_response.json
-          node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync("tasks_response.json","utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `course_ids=${JSON.stringify(j.courseIds||[])}\n`); console.log("courseIds:", JSON.stringify(j.courseIds||[]));'
+          node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync("tasks_response.json","utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `course_ids=${JSON.stringify(j.courseIds||[])}\n`); fs.appendFileSync(process.env.GITHUB_OUTPUT, `course_ids_for_ai=${JSON.stringify(j.courseIdsForAI||j.courseIds||[])}\n`); console.log("courseIds:", JSON.stringify(j.courseIds||[])); console.log("courseIdsForAI:", JSON.stringify(j.courseIdsForAI||j.courseIds||[]));'
 
       # Phase 2: extract readings one course at a time, paginating within
       # each course so even courses with hundreds of pages stay under
-      # Vercel Hobby's 60s serverless ceiling.
+      # Vercel Hobby's 60s serverless ceiling. Uses the filtered
+      # `course_ids_for_ai` list (which excludes onboarding boards, math
+      # courses, etc.) — set in `lib/canvas/sync.ts`.
       - name: Extract readings per course
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           APP_URL:     ${{ secrets.APP_URL }}
         run: |
           set -euo pipefail
-          ids='${{ steps.tasks.outputs.course_ids }}'
-          # JSON array like ["56744","57921"] → bash-friendly string.
+          ids='${{ steps.tasks.outputs.course_ids_for_ai }}'
+          # JSON array like ["57916","57918"] → bash-friendly string.
           ids="${ids#[}"; ids="${ids%]}"; ids="${ids//\"/}"
           IFS=',' read -ra ARR <<< "$ids"
           if [ "${#ARR[@]}" -eq 0 ] || [ -z "${ARR[0]}" ]; then
-            echo "No courses to process — skipping AI phase."
+            echo "No AI-eligible courses (all skipped) — skipping AI phase."
             exit 0
           fi
           for cid in "${ARR[@]}"; do
@@ -76,3 +78,23 @@ jobs:
           done
           echo ""
           echo "AI extraction pass complete."
+
+      # Phase 3: pull upcoming calendar events for the personal timetable
+      # view. The user's Canvas calendar is often empty (the EUR feeds
+      # MyTimetables data into Canvas but only after the term is live), so
+      # this is best-effort. Failures don't break the workflow.
+      - name: Sync timetable
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL:     ${{ secrets.APP_URL }}
+        run: |
+          set -euo pipefail
+          url="$APP_URL/api/sync?phase=timetable&weeks=4"
+          echo "---- POST $url ----"
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$url" || true)
+          code=$(echo "$response" | tail -n 1)
+          body=$(echo "$response" | head -n -1)
+          echo "Status: $code"
+          echo "Body: $body"
