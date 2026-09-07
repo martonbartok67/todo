@@ -39,7 +39,11 @@ async function handlePost(req: NextRequest) {
     if (!courseId) {
       return NextResponse.json({ error: "phase=ai requires ?courseId=<id>" }, { status: 400 });
     }
-    const result = await runAIForCourse(courseId);
+    const offsetRaw = req.nextUrl.searchParams.get("offset");
+    const limitRaw  = req.nextUrl.searchParams.get("limit");
+    const offset = offsetRaw !== null ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0;
+    const limit  = limitRaw  !== null ? Math.max(1, Math.min(100, parseInt(limitRaw, 10) || 20)) : 20;
+    const result = await runAIForCourse(courseId, { offset, limit });
     // 200 even on per-course "error"/"skipped" so the workflow can keep
     // iterating through remaining courses. The body says what happened.
     return NextResponse.json(result, { status: 200 });

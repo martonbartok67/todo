@@ -31,8 +31,9 @@ jobs:
           echo "$body" > tasks_response.json
           node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync("tasks_response.json","utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `course_ids=${JSON.stringify(j.courseIds||[])}\n`); console.log("courseIds:", JSON.stringify(j.courseIds||[]));'
 
-      # Phase 2: extract readings one course at a time. Each call is its own
-      # serverless invocation, so even the worst case stays under 60s.
+      # Phase 2: extract readings one course at a time, paginating within
+      # each course so even courses with hundreds of pages stay under
+      # Vercel Hobby's 60s serverless ceiling.
       - name: Extract readings per course
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -48,13 +49,30 @@ jobs:
             exit 0
           fi
           for cid in "${ARR[@]}"; do
-            echo "---- POST $APP_URL/api/sync?phase=ai&courseId=$cid ----"
-            response=$(curl -s -w "\n%{http_code}" -X POST \
-              -H "Authorization: Bearer $CRON_SECRET" \
-              "$APP_URL/api/sync?phase=ai&courseId=$cid" || true)
-            code=$(echo "$response" | tail -n 1)
-            body=$(echo "$response" | head -n -1)
-            echo "Status: $code"
-            echo "Body: $body"
+            echo ""
+            echo "=========== course $cid ==========="
+            offset=0
+            while : ; do
+              url="$APP_URL/api/sync?phase=ai&courseId=$cid&offset=$offset&limit=20"
+              echo "---- POST $url ----"
+              response=$(curl -s -w "\n%{http_code}" -X POST \
+                -H "Authorization: Bearer $CRON_SECRET" \
+                "$url" || true)
+              code=$(echo "$response" | tail -n 1)
+              body=$(echo "$response" | head -n -1)
+              echo "Status: $code"
+              echo "Body: $body"
+              if [ "$code" != "200" ]; then
+                echo "::warning::non-200 from AI phase for course $cid, continuing"
+                break
+              fi
+              # Parse nextOffset from the response body. If null, we're done.
+              next=$(echo "$body" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(j.nextOffset===null||j.nextOffset===undefined?"DONE":String(j.nextOffset));}catch(e){process.stdout.write("PARSE_ERR");}})')
+              if [ "$next" = "DONE" ] || [ "$next" = "PARSE_ERR" ]; then
+                break
+              fi
+              offset=$next
+            done
           done
+          echo ""
           echo "AI extraction pass complete."

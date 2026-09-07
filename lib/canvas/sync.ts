@@ -41,14 +41,21 @@ export type TaskSyncResult = {
  * Result of an AI pass for a single course. Always returns 200 from the
  * route handler so the workflow can keep iterating through remaining
  * courses even if one fails.
+ *
+ * `pagesTotal` is the total number of pages in the course (or in scope);
+ * if `nextOffset` is non-null, more pages remain and the workflow should
+ * call again with that offset. This is how we stay under Vercel Hobby's
+ * 60s ceiling for courses with hundreds of pages.
  */
 export type CourseAIResult = {
   status:            "success" | "skipped" | "error";
   courseId:          string;
   courseName:        string;
   pagesProcessed:    number;
+  pagesTotal:        number;
   readingsExtracted: number;
   durationMs:        number;
+  nextOffset:        number | null;
   pageLog?:          { course: string; page: string; bodyLen: number; extracted: number; error?: string }[];
   error?:            string;
 };
@@ -99,9 +106,18 @@ export async function runSync(): Promise<SyncResult> {
   let readingsExtracted = 0;
   const allPageLog: SyncResult["pageLog"] = [];
   for (const id of taskResult.courseIds) {
-    const r = await runAIForCourse(id);
-    readingsExtracted += r.readingsExtracted;
-    if (r.pageLog) allPageLog.push(...r.pageLog);
+    // Walk through pages in batches of 20 until exhausted. Each call is
+    // its own serverless invocation in production, so this matches what
+    // the workflow does for us. We pass a generous limit here because
+    // runSync() runs in a single process.
+    let offset = 0;
+    for (;;) {
+      const r = await runAIForCourse(id, { offset, limit: 20 });
+      readingsExtracted += r.readingsExtracted;
+      if (r.pageLog) allPageLog.push(...r.pageLog);
+      if (r.nextOffset === null) break;
+      offset = r.nextOffset;
+    }
   }
 
   return {
@@ -190,15 +206,23 @@ export async function runTaskSync(): Promise<TaskSyncResult> {
  * self-contained — works in any serverless environment and is safe to retry.
  * Returns "skipped" if GROQ_API_KEY is missing (rather than throwing) so a
  * misconfigured prod env degrades gracefully.
+ *
+ * For courses with many pages, the workflow can paginate by calling this
+ * with `offset` and `limit` until `nextOffset` is null.
  */
-export async function runAIForCourse(courseId: string): Promise<CourseAIResult> {
+export async function runAIForCourse(
+  courseId: string,
+  options: { offset?: number; limit?: number } = {},
+): Promise<CourseAIResult> {
   const startedAt = Date.now();
+  const offset    = options.offset ?? 0;
+  const limit     = options.limit  ?? 20;
 
   if (!process.env.GROQ_API_KEY) {
     return {
       status: "skipped", courseId, courseName: "",
-      pagesProcessed: 0, readingsExtracted: 0,
-      durationMs: Date.now() - startedAt,
+      pagesProcessed: 0, pagesTotal: 0, readingsExtracted: 0,
+      durationMs: Date.now() - startedAt, nextOffset: null,
       error: "GROQ_API_KEY not set",
     };
   }
@@ -212,22 +236,41 @@ export async function runAIForCourse(courseId: string): Promise<CourseAIResult> 
       .limit(1);
     const courseName = rows[0]?.name ?? courseId;
 
+    // Re-fetch assignments + modules + page bodies, but only do the body
+    // fetch when we actually need the body (i.e. when there are pages to
+    // process in this batch). For very large courses, syncCourseTasks will
+    // skip body fetches if the course has too many pages — but in that case
+    // the AI phase won't get useful bodies anyway, so we accept the
+    // degraded behavior and let the workflow fall through.
     const { pageMap } = await syncCourseTasks(courseId, courseName);
-    const pages = Array.from(pageMap.values());
+    const allPages = Array.from(pageMap.values());
+    const total    = allPages.length;
 
-    if (pages.length === 0) {
+    if (total === 0 || offset >= total) {
       return {
         status: "success", courseId, courseName,
-        pagesProcessed: 0, readingsExtracted: 0,
-        durationMs: Date.now() - startedAt,
+        pagesProcessed: 0, pagesTotal: total, readingsExtracted: 0,
+        durationMs: Date.now() - startedAt, nextOffset: null,
       };
     }
 
-    const { readingsExtracted, pageLog } = await runAIForPages(courseId, courseName, pages);
+    const batch     = allPages.slice(offset, offset + limit);
+    const lastIdx   = offset + batch.length;
+    const nextOffset = lastIdx < total ? lastIdx : null;
+
+    if (batch.length === 0) {
+      return {
+        status: "success", courseId, courseName,
+        pagesProcessed: 0, pagesTotal: total, readingsExtracted: 0,
+        durationMs: Date.now() - startedAt, nextOffset: null,
+      };
+    }
+
+    const { readingsExtracted, pageLog } = await runAIForPages(courseId, courseName, batch);
     return {
       status: "success", courseId, courseName,
-      pagesProcessed: pages.length, readingsExtracted,
-      durationMs: Date.now() - startedAt,
+      pagesProcessed: batch.length, pagesTotal: total, readingsExtracted,
+      durationMs: Date.now() - startedAt, nextOffset,
       pageLog,
     };
   } catch (err) {
@@ -235,8 +278,8 @@ export async function runAIForCourse(courseId: string): Promise<CourseAIResult> 
     console.error(`runAIForCourse(${courseId}) failed:`, err);
     return {
       status: "error", courseId, courseName: "",
-      pagesProcessed: 0, readingsExtracted: 0,
-      durationMs: Date.now() - startedAt,
+      pagesProcessed: 0, pagesTotal: 0, readingsExtracted: 0,
+      durationMs: Date.now() - startedAt, nextOffset: null,
       error: errorMessage,
     };
   }
