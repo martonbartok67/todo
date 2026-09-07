@@ -16,7 +16,9 @@ export type ExtractedReading = {
   detail:       string | null;
   weekNumber?:  number | null;
   week?:        number | null;
+  lecture?:     number | null;
   lectureSlot?: "lecture_1" | "lecture_2" | "lecture_3" | "unknown" | null;
+  slot?:        string | null;
 };
 
 // Broad keyword set — matches schedules, module overviews, and course manuals
