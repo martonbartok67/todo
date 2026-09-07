@@ -84,55 +84,102 @@ Rules:
 - Return only the JSON array, no markdown, no explanation`;
 
   try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY!}`,
-      },
-      body: JSON.stringify({
-        // `llama-3.3-70b-versatile` was retired by Groq; `gpt-oss-120b` is
-        // the closest free replacement (120B params, json_mode, structured
-        // outputs). If you ever see "model not found" again, list available
-        // models with: GET https://api.groq.com/openai/v1/models
-        model:       process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
-        max_tokens:  2048,
-        temperature: 0,
-        messages: [
-          {
-            role:    "system",
-            content: "You are a precise data extractor. Output only valid JSON arrays, no prose, no markdown.",
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-      // 2-minute ceiling per call so a single hung request can't pin the
-      // whole sync. GPT-OSS-120B normally responds in 3–8s; this is just
-      // insurance against network stalls or model timeouts.
-      signal: AbortSignal.timeout(120_000),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      console.error(`Groq API ${res.status} for page "${pageTitle}":`, body);
-      return [];
-    }
-
-    const data = await res.json() as {
-      choices: { message: { content: string } }[];
-    };
-
-    const raw     = data.choices?.[0]?.message?.content ?? "[]";
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-
-    // Find the JSON array even if there's surrounding text
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    if (!match) return [];
-
-    const parsed = JSON.parse(match[0]) as ExtractedReading[];
-    return Array.isArray(parsed) ? parsed : [];
+    return await callGroqWithRetry(pageTitle, prompt);
   } catch (err) {
     console.error(`extractReadings failed for page "${pageTitle}":`, err);
     return [];
   }
+}
+
+/**
+ * Call Groq with retry on 429 / 5xx / network errors.
+ *
+ * The free Groq tier limits tokens-per-minute (TPM) at 8000. Burst calls
+ * from a single sync can blow past that. The 429 response includes
+ * `error.message` like "Limit 8000, Used 7037, Requested 1100", and our
+ * retry will eventually succeed once the 60-second TPM window refills.
+ */
+async function callGroqWithRetry(
+  pageTitle: string,
+  prompt:    string,
+): Promise<ExtractedReading[]> {
+  const MAX_ATTEMPTS = 4;
+  let lastErr: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${process.env.GROQ_API_KEY!}`,
+        },
+        body: JSON.stringify({
+          // `llama-3.3-70b-versatile` was retired by Groq; `gpt-oss-120b` is
+          // the closest free replacement (120B params, json_mode, structured
+          // outputs). If you ever see "model not found" again, list available
+          // models with: GET https://api.groq.com/openai/v1/models
+          model:       process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
+          max_tokens:  2048,
+          temperature: 0,
+          messages: [
+            {
+              role:    "system",
+              content: "You are a precise data extractor. Output only valid JSON arrays, no prose, no markdown.",
+            },
+            { role: "user", content: prompt },
+          ],
+        }),
+        // 2-minute ceiling per call so a single hung request can't pin the
+        // whole sync. GPT-OSS-120B normally responds in 3–8s; this is just
+        // insurance against network stalls or model timeouts.
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      // Retry on rate limit (429) and transient server errors (5xx).
+      if (res.status === 429 || res.status >= 500) {
+        const body = await res.text().catch(() => "");
+        lastErr = new Error(`Groq API ${res.status}: ${body.slice(0, 200)}`);
+        const delay = 2000 * attempt; // 2s, 4s, 6s, 8s
+        console.warn(
+          `Groq ${res.status} for page "${pageTitle}" (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${delay}ms`
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+
+      if (!res.ok) {
+        const body = await res.text();
+        // Non-retryable: log and bail.
+        console.error(`Groq API ${res.status} for page "${pageTitle}":`, body);
+        return [];
+      }
+
+      const data = await res.json() as {
+        choices: { message: { content: string } }[];
+      };
+
+      const raw     = data.choices?.[0]?.message?.content ?? "[]";
+      const cleaned = raw.replace(/```json|```/g, "").trim();
+
+      // Find the JSON array even if there's surrounding text
+      const match = cleaned.match(/\[[\s\S]*\]/);
+      if (!match) return [];
+
+      const parsed = JSON.parse(match[0]) as ExtractedReading[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      lastErr = err;
+      // Network/timeout — also worth retrying.
+      const delay = 2000 * attempt;
+      console.warn(
+        `Groq network error for page "${pageTitle}" (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${delay}ms:`,
+        err
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+
+  console.error(`Groq gave up after ${MAX_ATTEMPTS} attempts for page "${pageTitle}":`, lastErr);
+  return [];
 }
