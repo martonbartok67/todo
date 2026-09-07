@@ -1,104 +1,42 @@
 /**
- * POST /api/sync                          — full sync (will likely hit Vercel Hobby 60s cap)
- * POST /api/sync?phase=tasks               — pull courses + tasks only (fast, ~10-15s)
- * POST /api/sync?phase=ai&courseId=…      — extract readings for one course
- * POST /api/sync?phase=classify&courseId=… — AI classify tasks for one course (Step 2)
- * POST /api/sync?phase=timetable           — pull Canvas calendar events
- * POST /api/sync?phase=ical                — pull iCal feed (MyTimetable)
- * GET  /api/sync?secret=…                  — verbose diagnostic mode (browser test)
+ * POST /api/sync — full Canvas sync
+ * GET  /api/sync?secret=X — same, callable from browser for debugging
  */
 import { NextRequest, NextResponse } from "next/server";
-import { runSync, runTaskSync, runAIForCourse, runClassifyForCourse, runTimetableSync, runIcalSync } from "@/lib/canvas/sync";
-import { dbReady } from "@/lib/db";
+import { runSync } from "@/lib/canvas/sync";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // Vercel Pro honors this (up to 300s); Hobby hard-caps at 60s
+export const maxDuration = 60;
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
+async function handle(req: NextRequest) {
+  const authHeader = req.headers.get("authorization");
+  const secretParam = req.nextUrl.searchParams.get("secret");
+  const secret = process.env.CRON_SECRET;
 
-async function handlePost(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return unauthorized();
+  const authorized =
+    (authHeader && secret && authHeader === `Bearer ${secret}`) ||
+    (secretParam && secret && secretParam === secret);
+
+  if (!authorized) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const phase    = req.nextUrl.searchParams.get("phase") ?? "full";
-  const courseId = req.nextUrl.searchParams.get("courseId");
-  console.log(`[sync] phase=${phase} courseId=${courseId ?? "-"}`);
+  const result = await runSync();
 
-  // Ensure schema is bootstrapped before any writes — first request to a
-  // fresh DB would otherwise race the background ensureSchema() and hit
-  // "no such table: courses". Safe on subsequent calls (cached promise).
-  await dbReady();
-
-  if (phase === "tasks") {
-    const result = await runTaskSync();
-    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
-  }
-
-  if (phase === "ai") {
-    if (!courseId) {
-      return NextResponse.json({ error: "phase=ai requires ?courseId=<id>" }, { status: 400 });
-    }
-    const offsetRaw = req.nextUrl.searchParams.get("offset");
-    const limitRaw  = req.nextUrl.searchParams.get("limit");
-    const offset = offsetRaw !== null ? Math.max(0, parseInt(offsetRaw, 10) || 0) : 0;
-    const limit  = limitRaw  !== null ? Math.max(1, Math.min(100, parseInt(limitRaw, 10) || 20)) : 20;
-    const result = await runAIForCourse(courseId, { offset, limit });
-    // 200 even on per-course "error"/"skipped" so the workflow can keep
-    // iterating through remaining courses. The body says what happened.
-    return NextResponse.json(result, { status: 200 });
-  }
-
-  if (phase === "classify") {
-    if (!courseId) {
-      return NextResponse.json({ error: "phase=classify requires ?courseId=<id>" }, { status: 400 });
-    }
-    const force = req.nextUrl.searchParams.get("force") === "1";
-    const result = await runClassifyForCourse(courseId, { force });
-    return NextResponse.json(result, { status: 200 });
-  }
-
-  if (phase === "timetable") {
-    const weeksRaw = req.nextUrl.searchParams.get("weeks");
-    const weeks = weeksRaw !== null ? Math.max(1, Math.min(12, parseInt(weeksRaw, 10) || 4)) : 4;
-    const result = await runTimetableSync({ weeks });
-    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
-  }
-
-  if (phase === "ical") {
-    const result = await runIcalSync();
-    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
-  }
-
-  if (phase === "full") {
-    const result = await runSync();
-    return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
+  // After sync, auto-attach timetable deadlines to undated tasks
+  let deadlineResult: { matched: number; skipped: number; noEvents: number } | null = null;
+  try {
+    const { attachTimetableDeadlines } = await import("@/app/actions/timetable");
+    deadlineResult = await attachTimetableDeadlines();
+  } catch (err) {
+    console.error("attachTimetableDeadlines failed (non-fatal):", err);
   }
 
   return NextResponse.json(
-    { error: `Unknown phase "${phase}". Use one of: tasks, ai, classify, timetable, ical, full.` },
-    { status: 400 }
+    { ...result, deadlines: deadlineResult },
+    { status: result.status === "error" ? 500 : 200 }
   );
 }
 
-export async function POST(req: NextRequest) {
-  return handlePost(req);
-}
-
-/**
- * GET /api/sync?secret=X — diagnostic mode for testing from a browser.
- * Always runs the full sync (no phase param). Useful for quickly triaging
- * the readings pipeline without hitting the GitHub Actions runner.
- */
-export async function GET(req: NextRequest) {
-  const secret = req.nextUrl.searchParams.get("secret");
-  if (!secret || secret !== process.env.CRON_SECRET) {
-    return unauthorized();
-  }
-  await dbReady();
-  const result = await runSync();
-  return NextResponse.json(result, { status: result.status === "error" ? 500 : 200 });
-}
+export async function POST(req: NextRequest) { return handle(req); }
+export async function GET(req: NextRequest)  { return handle(req); }
