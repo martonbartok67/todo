@@ -11,14 +11,24 @@
 export type LectureSlot = "lecture_1" | "lecture_2" | "lecture_3" | "unknown";
 
 export type ExtractedReading = {
-  lectureLabel: string;
-  readingText:  string;
-  detail:       string | null;
-  weekNumber?:  number | null;
-  week?:        number | null;
-  lecture?:     number | null;
-  lectureSlot?: "lecture_1" | "lecture_2" | "lecture_3" | "unknown" | null;
-  slot?:        string | null;
+  // Core fields — always present in well-formed AI output
+  lectureLabel:  string;
+  readingText:   string;
+  detail:        string | null;
+  weekNumber:    number | null;
+  lectureSlot:   LectureSlot;
+  // Alias fields — the AI sometimes uses different key names;
+  // the parser normalises all of these into the core fields above.
+  week?:         number | null;
+  lecture?:      number | null;
+  slot?:         string | null;
+  chapter?:      string | number | null;
+  chapters?:     string | null;
+  topic?:        string | null;
+  preparation?:  string | null;
+  reading?:      string | null;
+  title?:        string | null;
+  source?:       string | null;
 };
 
 // Broad keyword set — matches schedules, module overviews, and course manuals
