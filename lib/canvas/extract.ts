@@ -11,11 +11,12 @@
 export type LectureSlot = "lecture_1" | "lecture_2" | "lecture_3" | "unknown";
 
 export type ExtractedReading = {
-  lectureLabel: string;          // e.g. "Week 36 — Lecture 1" or "Module 3 (wk38)"
-  readingText:  string;          // e.g. "Chapters 1 & 3" or "Chapter 5"
-  detail:       string | null;    // topic/title if available
-  weekNumber:   number | null;   // ISO-style week number, e.g. 36
-  lectureSlot:  LectureSlot;      // "lecture_1" / "lecture_2" / "lecture_3" / "unknown"
+  lectureLabel: string;
+  readingText:  string;
+  detail:       string | null;
+  weekNumber?:  number | null;
+  week?:        number | null;
+  lectureSlot?: "lecture_1" | "lecture_2" | "lecture_3" | "unknown" | null;
 };
 
 // Broad keyword set — matches schedules, module overviews, and course manuals
