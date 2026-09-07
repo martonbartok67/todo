@@ -1,9 +1,10 @@
 import { db } from "@/lib/db";
 import { timetableEvents, tasks, userSettings } from "@/drizzle/schema";
-import { asc, gte, isNull, and, eq, sql } from "drizzle-orm";
+import { asc, gte, isNull, and, eq, lte } from "drizzle-orm";
 import TimetableDashboard from "@/components/TimetableDashboard";
 import { PageChrome } from "@/components/PageChrome";
 import type { TimetableEvent } from "@/drizzle/schema";
+import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -18,12 +19,14 @@ export default async function TimetablePage() {
 
   try {
     events = await db.select().from(timetableEvents)
-      .where(and(gte(timetableEvents.startAt, now), sql\`\${timetableEvents.startAt} <= \${horizon}\`))
+      .where(and(gte(timetableEvents.startAt, now), lte(timetableEvents.startAt, horizon)))
       .orderBy(asc(timetableEvents.startAt));
   } catch {}
 
   try {
-    const rows = await db.select({ n: sql<number>\`count(*)\` }).from(tasks)
+    const rows = await db
+      .select({ n: sql`count(*)` })
+      .from(tasks)
       .where(and(isNull(tasks.dueAt), isNull(tasks.completedAt)));
     undatedCount = Number(rows[0]?.n ?? 0);
   } catch {}
