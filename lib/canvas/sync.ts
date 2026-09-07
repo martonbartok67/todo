@@ -267,9 +267,18 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
   const moduleItems: CanvasModuleItem[] = modules.flatMap((m) => m.items ?? []);
   const pageItems = moduleItems.filter((m) => m.type === "Page" && m.page_url);
 
-  const pageResults = await Promise.all(
-    pageItems.map((m) => fetchPage(courseId, m.page_url!))
-  );
+  // Conditionally fetch page bodies. The body is only needed to populate
+  // `description` for non-AI pages and to feed Groq in the AI phase. If
+  // there are too many pages (e.g. 154 for the RSM Bachelor Exchange
+  // onboarding course), the round-trip cost can blow Vercel Hobby's 60s
+  // ceiling. We skip the body fetch in that case so the task phase stays
+  // fast; the AI phase will re-fetch bodies per-course as needed (one
+  // serverless invocation per course).
+  const FETCH_BODIES_THRESHOLD = 50; // pages; above this, skip body fetch
+  const shouldFetchBodies = pageItems.length <= FETCH_BODIES_THRESHOLD;
+  const pageResults = shouldFetchBodies
+    ? await Promise.all(pageItems.map((m) => fetchPage(courseId, m.page_url!)))
+    : pageItems.map(() => null);
 
   const pageMap = new Map<string, CanvasPage>();
   pageItems.forEach((m, i) => {
