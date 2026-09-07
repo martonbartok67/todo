@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { tasks, timetableEvents, userSettings } from "@/drizzle/schema";
 import { eq, and, isNull, gt, asc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { runIcalSync } from "@/lib/canvas/sync";
 
 /**
  * For every pending task with `due_at IS NULL`, look up the next upcoming
@@ -135,32 +136,23 @@ export async function saveIcalUrl(url: string, label: string | null): Promise<{
       target: userSettings.id,
       set: { icalUrl: trimmed, icalLabel: label, updatedAt: now },
     });
-  revalidatePath("/timetable");
 
-  // Trigger an immediate sync via the dedicated route endpoint. This
-  // avoids dynamic-importing the whole canvas sync module from inside
-  // a "use server" action (Next bundles server actions separately and
-  // that pattern breaks in some configs — the page ends up blank).
-  // The cron secret lives in the same Vercel project so this is safe.
-  const base = process.env.APP_URL || "";
-  const secret = process.env.CRON_SECRET || "";
-  if (base && secret) {
-    try {
-      const r = await fetch(`${base}/api/sync?phase=ical`, {
-        method:  "POST",
-        headers: { Authorization: `Bearer ${secret}` },
-        signal:  AbortSignal.timeout(45_000),
-      });
-      const body = (await r.json().catch(() => ({}))) as { eventsUpserted?: number; error?: string };
-      if (r.ok) {
-        return { status: "saved", synced: body.eventsUpserted ?? 0, error: body.error };
-      }
-      return { status: "saved", synced: 0, error: `sync returned ${r.status}: ${body.error ?? ""}` };
-    } catch (err) {
-      return { status: "saved", synced: 0, error: `sync fetch failed: ${String(err)}` };
-    }
+  // Run the iCal sync in-process. The function reads the URL we just
+  // saved, fetches the feed, parses it, and upserts events. We cap it
+  // at 45s so the server action can't blow past Vercel's 60s limit.
+  try {
+    const r = await Promise.race([
+      runIcalSync(),
+      new Promise<{ eventsUpserted: number; error: string }>((resolve) =>
+        setTimeout(() => resolve({ eventsUpserted: 0, error: "sync timed out after 45s" }), 45_000)
+      ),
+    ]);
+    revalidatePath("/timetable");
+    return { status: "saved", synced: r.eventsUpserted, error: r.error };
+  } catch (err) {
+    revalidatePath("/timetable");
+    return { status: "saved", synced: 0, error: `sync threw: ${String(err)}` };
   }
-  return { status: "saved", synced: 0, error: "saved; APP_URL/CRON_SECRET not configured, will sync on next cron tick" };
 }
 
 /**
