@@ -735,21 +735,53 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
       };
     }
 
-    // Best-effort course lookup: MyTimetable iCal exports often include
-    // a CATEGORIES property with the course code. We try to map that
-    // to a known course in our `courses` table.
+    // Best-effort course lookup. MyTimetable iCal exports typically put the
+    // course code in the SUMMARY (e.g. "BT1205 - Professional development &
+    // mentoring I"), not in CATEGORIES — so we try CATEGORIES first and
+    // fall back to scanning the SUMMARY against a regex made from our
+    // known course codes. Keeps matching precise: a generic "[A-Z]{2,}\d{3,}"
+    // regex would over-match (RSM, IBA, etc.).
     const courseCodeByName = new Map<string, { id: string; name: string }>();
+    const knownCodes: string[] = [];
     const knownCourses = await db.select({ id: courses.canvasId, name: courses.name, code: courses.courseCode })
       .from(courses);
     for (const c of knownCourses) {
-      if (c.code) courseCodeByName.set(c.code.toLowerCase(), { id: c.id, name: c.name });
+      if (c.code) {
+        courseCodeByName.set(c.code.toLowerCase(), { id: c.id, name: c.name });
+        knownCodes.push(c.code);
+      }
     }
+    // Escape regex metacharacters in case a code ever contains one,
+    // then build a single alternation. Case-insensitive flag matches
+    // SUMMARYs written in either case.
+    const summaryCodeRegex = knownCodes.length
+      ? new RegExp(`\\b(?:${knownCodes.map(escapeRegex).join("|")})\\b`, "i")
+      : null;
 
     let upserted = 0;
     for (const e of events) {
       const now = new Date().toISOString();
+
+      // 1. Try CATEGORIES (comma/semicolon-separated list).
       const cat = (e.categories ?? "").toLowerCase().split(/[,;]/).map((s) => s.trim()).filter(Boolean)[0] ?? "";
-      const matched = courseCodeByName.get(cat);
+      let matched = courseCodeByName.get(cat);
+
+      // 1b. If the first CATEGORIES token wasn't a known code, scan the
+      //     whole CATEGORIES string too — MyTimetable sometimes prepends
+      //     "Course, " before the code, e.g. "Course, BT1205".
+      if (!matched && summaryCodeRegex && e.categories) {
+        const m = e.categories.match(summaryCodeRegex);
+        if (m) matched = courseCodeByName.get(m[0].toLowerCase());
+      }
+
+      // 2. Fall back to a code anywhere in the SUMMARY — common in
+      //    MyTimetable exports where SUMMARY is "<CODE> - <title>".
+      if (!matched && summaryCodeRegex && e.summary) {
+        const m = e.summary.match(summaryCodeRegex);
+        if (m) {
+          matched = courseCodeByName.get(m[0].toLowerCase());
+        }
+      }
 
       await db.insert(timetableEvents).values({
         canvasId:       e.uid,
@@ -879,6 +911,10 @@ function unescapeIcal(s: string): string {
     .replace(/\\,/g, ",")
     .replace(/\\;/g, ";")
     .replace(/\\\\/g, "\\");
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function parseIcalDate(value: string, fullName: string): Date {
