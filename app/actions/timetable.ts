@@ -3,7 +3,7 @@
  * Server actions for timetable-related operations.
  */
 import { db, dbReady } from "@/lib/db";
-import { tasks, timetableEvents, userSettings } from "@/drizzle/schema";
+import { tasks, timetableEvents, userSettings, courses } from "@/drizzle/schema";
 import { eq, and, isNull, gt, asc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { runIcalSync } from "@/lib/canvas/sync";
@@ -13,7 +13,10 @@ import { runIcalSync } from "@/lib/canvas/sync";
  * calendar event for the same course and set `due_at = event.start_at`.
  *
  * If the same course has no upcoming events, the task is left unchanged.
- * If multiple events exist, the soonest one wins.
+ * If multiple events exist, the one with the strongest title overlap wins,
+ * with ties going to the soonest. Falls back to the soonest event for the
+ * course when no event shares words with the task — this keeps coverage
+ * high for courses where every event has an identical title.
  *
  * Returns counts of how many tasks were assigned vs. left untouched.
  */
@@ -48,6 +51,22 @@ export async function attachTimetableDeadlines(): Promise<{
     .where(gt(timetableEvents.startAt, now))
     .orderBy(asc(timetableEvents.startAt));
 
+  // Per-course "subject signature": words from the course name + code.
+  // Used by pickBestEvent to bias toward events that look like they
+  // belong to the same subject as the task.
+  const courseCodeByCourse = new Map<string, string | null>();
+  const courseSigByCourse = new Map<string, Set<string>>();
+  const allCourses = await db
+    .select({ canvasId: courses.canvasId, courseCode: courses.courseCode, name: courses.name })
+    .from(courses);
+  for (const c of allCourses) {
+    courseCodeByCourse.set(c.canvasId, c.courseCode);
+    courseSigByCourse.set(
+      c.canvasId,
+      new Set(tokenize(`${c.courseCode ?? ""} ${c.name}`)),
+    );
+  }
+
   // Index upcoming events by course.
   const byCourse = new Map<string, typeof upcoming>();
   for (const e of upcoming) {
@@ -68,8 +87,13 @@ export async function attachTimetableDeadlines(): Promise<{
     }
 
     // Prefer the event whose title most closely matches the task title.
-    // Falls back to the soonest event for the course.
-    const best = pickBestEvent(t.title, events);
+    // Falls back to the soonest event for the course when no event
+    // shares any words with the task (keeps the 330-attached coverage
+    // high for courses whose every event has the same title).
+    const best = pickBestEvent(t.title, events, {
+      courseCode: courseCodeByCourse.get(t.courseCanvasId) ?? null,
+      courseSignature: courseSigByCourse.get(t.courseCanvasId) ?? new Set(),
+    });
 
     await db
       .update(tasks)
@@ -85,24 +109,74 @@ export async function attachTimetableDeadlines(): Promise<{
 }
 
 /**
- * Choose the best upcoming event for a given task. We score by how many
- * words the task title shares with the event title; ties go to the
- * sooner event.
+ * Tokenize a string into a Set of "significant" lowercased words.
+ * Drops words shorter than 3 chars and pure digits (course codes are
+ * stripped separately by the caller, but we also drop stray numeric
+ * tokens like week-1 / session-2 to avoid false matches).
+ */
+function tokenize(s: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of s.toLowerCase().split(/\W+/)) {
+    if (w.length < 3) continue;
+    if (/^\d+$/.test(w)) continue;
+    out.add(w);
+  }
+  return out;
+}
+
+/**
+ * Strip a leading "<CODE> - " prefix from an event title if present.
+ * E.g. "BT1304 - Mathematics Tutorial" → "Mathematics Tutorial".
+ * Used so the course code doesn't pollute the word-overlap scoring.
+ */
+function stripCourseCodePrefix(title: string, courseCode: string | null): string {
+  if (!courseCode) return title;
+  const prefix = courseCode.toLowerCase();
+  const lower = title.toLowerCase();
+  if (lower.startsWith(prefix)) {
+    const rest = title.slice(courseCode.length).replace(/^[\s\-:]+/, "");
+    return rest || title;
+  }
+  return title;
+}
+
+/**
+ * Choose the best upcoming event for a given task. Scoring:
+ *   1. +1 for every "significant" word the task title shares with the
+ *      event title (case-folded, after stripping the course-code prefix).
+ *   2. +1 (bonus) for every word the event title shares with the
+ *      course's subject signature (course code + name). This biases
+ *      toward events that look like they belong to the same subject
+ *      as the task even when the task title doesn't repeat the words.
+ * Ties go to the sooner event (events are pre-sorted by startAt ASC,
+ * so the first event with the highest score wins).
+ *
+ * Falls back to the soonest event for the course when no event shares
+ * any words with the task — this preserves coverage for courses whose
+ * every event has the same title (e.g. "BT1304 - Mathematics" x20).
  */
 function pickBestEvent<T extends { title: string; startAt: string }>(
   taskTitle: string,
   events: T[],
+  opts: { courseCode: string | null; courseSignature: Set<string> },
 ): T {
-  const taskWords = new Set(
-    taskTitle.toLowerCase().split(/\W+/).filter((w) => w.length >= 3)
-  );
+  const taskWords = tokenize(taskTitle);
   if (taskWords.size === 0) return events[0]!;
 
   let best = events[0]!;
   let bestScore = 0;
   for (const e of events) {
-    const evWords = e.title.toLowerCase().split(/\W+/).filter((w) => w.length >= 3);
-    const score = evWords.reduce((acc, w) => acc + (taskWords.has(w) ? 1 : 0), 0);
+    const evTitle = stripCourseCodePrefix(e.title, opts.courseCode);
+    const evWords = tokenize(evTitle);
+
+    let score = 0;
+    evWords.forEach((w) => {
+      if (taskWords.has(w)) score += 1;
+      // Subject-signature bonus: prefer events that share words with
+      // the course name itself (e.g. "Mathematics" appearing in the
+      // event title when the course is "Mathematics").
+      else if (opts.courseSignature.has(w)) score += 0.5;
+    });
     if (score > bestScore) {
       best = e;
       bestScore = score;
