@@ -1,63 +1,35 @@
 /**
- * @libsql/client@0.6.x (the version currently installed) has a known bug:
- * every execute()/batch() call first calls getIsSchemaDatabase() via a
- * global fetch to GET /v1/jobs. Turso returns 400 for that endpoint on
- * databases that aren't running the Drizzle migration system, and the
- * client's error handler throws:
- *   "Unexpected status code while fetching migration jobs: 400"
+ * Turso / libSQL client with self-healing schema bootstrap.
  *
- * We intercept ALL global fetch calls BEFORE @libsql/client code runs (so that
- * migrations.js captures our patched fetch when it imports it at the top level)
- * and return HTTP 404 for any /v1/jobs request. The client treats 404 as
- * "not a schema database" → returns false → skips waitForLastMigrationJobToFinish().
+ * Bootstrap strategy (fast path first):
+ *   1. Check if all required tables exist in ONE query.
+ *   2. If yes → skip all DDL, return immediately.
+ *   3. If no  → run CREATE TABLE IF NOT EXISTS for missing tables only.
+ *   4. Run column migrations PER TABLE (one PRAGMA per table, not per column).
  *
- * This works on any @libsql/client version because the migration checks always
- * go through the global fetch, not the custom fetch passed to createClient().
+ * This cuts cold-start overhead from ~16 sequential HTTP calls to 1-2.
  */
+
+// Patch global fetch to suppress @libsql/client's migration-job poller
+// (GET /v1/jobs → 400 from Turso → client throws). Return 404 instead
+// so the client treats it as "no migration in flight".
 (function patchGlobalFetch() {
   const FLAG = "__pollerBypassInstalled";
   const g = globalThis as typeof globalThis & { [FLAG]?: boolean };
-
-  // We patch fetch EVERY time this module loads. Multiple patches just
-  // chain — the latest one is the outermost wrapper, so its /v1/jobs
-  // check runs first and returns 404 without ever reaching the inner
-  // fetch (which would call Turso and get a 400).
-  const previous = g[FLAG] ? (globalThis.fetch as typeof fetch) : null;
-  const original = (previous ?? globalThis.fetch).bind(globalThis) as typeof fetch;
-
+  if (g[FLAG]) return;
+  const original = globalThis.fetch.bind(globalThis) as typeof fetch;
   globalThis.fetch = ((input, init) => {
-    // Normalize the URL so we can match the @libsql/client migration poller
-    // regardless of whether the caller passed a string, a URL, or a Request.
-    let urlStr: string;
+    let urlStr = "";
     try {
-      if (typeof input === "string") {
-        urlStr = input;
-      } else if (input instanceof URL) {
-        urlStr = input.href;
-      } else if (input && typeof input === "object" && "url" in input) {
-        urlStr = String((input as Request).url ?? "");
-      } else {
-        urlStr = "";
-      }
-    } catch {
-      urlStr = "";
-    }
-
-    // @libsql/client polls GET /v1/jobs before every execute() to wait for
-    // any in-flight migration. Turso returns 400 for that endpoint on
-    // databases that aren't running the Drizzle migration system, which
-    // trips the poller's error handler. We return 404 instead, which the
-    // client treats as "no migration in flight" and proceeds normally.
-    //
-    // We also match "/v2/jobs" in case the path changes in future
-    // @libsql/client versions.
+      if (typeof input === "string") urlStr = input;
+      else if (input instanceof URL) urlStr = input.href;
+      else if (input && typeof input === "object" && "url" in input) urlStr = String((input as Request).url ?? "");
+    } catch {}
     if (urlStr && (urlStr.includes("/v1/jobs") || urlStr.includes("/v2/jobs"))) {
       return Promise.resolve(new Response(null, { status: 404 }));
     }
-
     return original(input, init);
   }) as typeof fetch;
-
   g[FLAG] = true;
 })();
 
@@ -69,310 +41,187 @@ type DrizzleDB = LibSQLDatabase<typeof schema>;
 let _db: DrizzleDB | null = null;
 let _initPromise: Promise<void> | null = null;
 
-/**
- * Schema bootstrap statements — idempotent. Mirrors scripts/init-db.mjs
- * so the app can self-heal a fresh / wiped Turso DB without a separate
- * `npm run db:init` step.
- */
-const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS courses (
-     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-     canvas_id    TEXT NOT NULL,
-     name         TEXT NOT NULL,
-     course_code  TEXT,
-     term         TEXT,
-     accent_color TEXT,
-     last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS courses_canvas_id_idx ON courses (canvas_id)`,
+// Tables that must exist for the app to function
+const REQUIRED_TABLES = [
+  "courses", "tasks", "sync_log", "push_subscriptions",
+  "timetable_events", "user_settings", "reading_items",
+];
 
-  `CREATE TABLE IF NOT EXISTS tasks (
-     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-     course_canvas_id      TEXT NOT NULL,
-     canvas_id             TEXT NOT NULL,
-     source_type           TEXT NOT NULL,
-     title                 TEXT NOT NULL,
-     item_type             TEXT,
-     due_at                TEXT,
-     points_possible       REAL,
-     url                   TEXT,
-     description           TEXT,
-     completed_at          TEXT,
-     snoozed_until         TEXT,
-     last_synced_at        TEXT NOT NULL DEFAULT (datetime('now')),
-     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
-     updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
-     -- Step 2: AI classification
-     classification        TEXT NOT NULL DEFAULT 'unclassified',
-     classification_reason TEXT,
-     classified_at         TEXT
-   )`,
+// DDL run only when a table is missing
+const TABLE_DDL: Record<string, string[]> = {
+  courses: [`CREATE TABLE IF NOT EXISTS courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canvas_id TEXT NOT NULL, name TEXT NOT NULL, course_code TEXT, term TEXT,
+    accent_color TEXT,
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS courses_canvas_id_idx ON courses (canvas_id)`],
+
+  tasks: [`CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_canvas_id TEXT NOT NULL, canvas_id TEXT NOT NULL,
+    source_type TEXT NOT NULL, title TEXT NOT NULL, item_type TEXT,
+    due_at TEXT, points_possible REAL, url TEXT, description TEXT,
+    completed_at TEXT, snoozed_until TEXT,
+    last_synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    classification TEXT NOT NULL DEFAULT 'unclassified',
+    classification_reason TEXT, classified_at TEXT
+  )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS tasks_canvas_source_idx ON tasks (canvas_id, source_type)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_course_idx        ON tasks (course_canvas_id)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_due_at_idx        ON tasks (due_at)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_completed_idx     ON tasks (completed_at)`,
-  `CREATE        INDEX IF NOT EXISTS tasks_classification_idx ON tasks (classification)`,
+  `CREATE INDEX IF NOT EXISTS tasks_course_idx         ON tasks (course_canvas_id)`,
+  `CREATE INDEX IF NOT EXISTS tasks_due_at_idx         ON tasks (due_at)`,
+  `CREATE INDEX IF NOT EXISTS tasks_completed_idx      ON tasks (completed_at)`,
+  `CREATE INDEX IF NOT EXISTS tasks_classification_idx ON tasks (classification)`],
 
-  `CREATE TABLE IF NOT EXISTS sync_log (
-     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-     status            TEXT NOT NULL,
-     tasks_upserted    INTEGER NOT NULL DEFAULT 0,
-     courses_processed INTEGER NOT NULL DEFAULT 0,
-     error_message     TEXT,
-     duration_ms       INTEGER,
-     started_at        TEXT NOT NULL DEFAULT (datetime('now')),
-     finished_at       TEXT
-   )`,
+  sync_log: [`CREATE TABLE IF NOT EXISTS sync_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL, tasks_upserted INTEGER NOT NULL DEFAULT 0,
+    courses_processed INTEGER NOT NULL DEFAULT 0, error_message TEXT,
+    duration_ms INTEGER,
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT
+  )`],
 
-  `CREATE TABLE IF NOT EXISTS push_subscriptions (
-     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-     endpoint   TEXT NOT NULL,
-     p256dh_key TEXT NOT NULL,
-     auth_key   TEXT NOT NULL,
-     user_agent TEXT,
-     created_at TEXT NOT NULL DEFAULT (datetime('now'))
-   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS push_endpoint_idx ON push_subscriptions (endpoint)`,
+  push_subscriptions: [`CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint TEXT NOT NULL, p256dh_key TEXT NOT NULL, auth_key TEXT NOT NULL,
+    user_agent TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS push_endpoint_idx ON push_subscriptions (endpoint)`],
 
-  `CREATE TABLE IF NOT EXISTS timetable_events (
-     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-     canvas_id         TEXT NOT NULL,
-     source            TEXT NOT NULL DEFAULT 'canvas',
-     course_canvas_id  TEXT,
-     course_name       TEXT,
-     title             TEXT NOT NULL,
-     description       TEXT,
-     location          TEXT,
-     start_at          TEXT NOT NULL,
-     end_at            TEXT,
-     all_day           INTEGER NOT NULL DEFAULT 0,
-     event_type        TEXT,
-     source_url        TEXT,
-     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
-   )`,
+  timetable_events: [`CREATE TABLE IF NOT EXISTS timetable_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canvas_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'canvas',
+    course_canvas_id TEXT, course_name TEXT, title TEXT NOT NULL,
+    description TEXT, location TEXT,
+    start_at TEXT NOT NULL, end_at TEXT,
+    all_day INTEGER NOT NULL DEFAULT 0, event_type TEXT, source_url TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS timetable_events_canvas_id_idx ON timetable_events (canvas_id)`,
-  `CREATE        INDEX IF NOT EXISTS timetable_events_start_at_idx ON timetable_events (start_at)`,
-  `CREATE        INDEX IF NOT EXISTS timetable_events_course_idx   ON timetable_events (course_canvas_id)`,
+  `CREATE INDEX IF NOT EXISTS timetable_events_start_at_idx ON timetable_events (start_at)`,
+  `CREATE INDEX IF NOT EXISTS timetable_events_course_idx   ON timetable_events (course_canvas_id)`],
 
-  `CREATE TABLE IF NOT EXISTS user_settings (
-     id         INTEGER PRIMARY KEY,
-     ical_url   TEXT,
-     ical_label TEXT,
-     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-   )`,
-  `INSERT OR IGNORE INTO user_settings (id, ical_url, ical_label) VALUES (1, NULL, NULL)`,
-];
+  user_settings: [`CREATE TABLE IF NOT EXISTS user_settings (
+    id INTEGER PRIMARY KEY, ical_url TEXT, ical_label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `INSERT OR IGNORE INTO user_settings (id, ical_url, ical_label) VALUES (1, NULL, NULL)`],
 
-/**
- * Column-level migrations to bring older tables in line with the current
- * schema. Each entry is a column name; if the column is missing on the
- * given table, the matching ALTER TABLE is run.
- *
- * Runs on every cold start (after SCHEMA_STATEMENTS). The PRAGMA + ALTER
- * pair is fast (a few ms) and idempotent.
- */
-const COLUMN_MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
-  {
-    table:  "timetable_events",
-    column: "source",
-    ddl:    "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'",
-  },
-  // Step 2 — AI classification columns. Older DBs that pre-date this
-  // change need these ALTERs applied so new tasks land with the right
-  // default and existing tasks can be classified.
-  {
-    table:  "tasks",
-    column: "classification",
-    ddl:    "ALTER TABLE tasks ADD COLUMN classification TEXT NOT NULL DEFAULT 'unclassified'",
-  },
-  {
-    table:  "tasks",
-    column: "classification_reason",
-    ddl:    "ALTER TABLE tasks ADD COLUMN classification_reason TEXT",
-  },
-  {
-    table:  "tasks",
-    column: "classified_at",
-    ddl:    "ALTER TABLE tasks ADD COLUMN classified_at TEXT",
-  },
-  // Step 3 — structured syllabus columns on reading_items. The table
-  // itself is created by /api/migrate, but the column-level ALTERs
-  // also live here so the runtime bootstrap can self-heal a fresh
-  // / wiped DB that has the table but not the new columns.
-  {
-    table:  "reading_items",
-    column: "week_number",
-    ddl:    "ALTER TABLE reading_items ADD COLUMN week_number INTEGER",
-  },
-  {
-    table:  "reading_items",
-    column: "lecture_slot",
-    ddl:    "ALTER TABLE reading_items ADD COLUMN lecture_slot TEXT NOT NULL DEFAULT 'unknown'",
-  },
-  {
-    table:  "reading_items",
-    column: "source",
-    ddl:    "ALTER TABLE reading_items ADD COLUMN source TEXT NOT NULL DEFAULT 'ai'",
-  },
-  {
-    table:  "reading_items",
-    column: "lecture_date",
-    ddl:    "ALTER TABLE reading_items ADD COLUMN lecture_date TEXT",
-  },
-];
+  reading_items: [`CREATE TABLE IF NOT EXISTS reading_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_canvas_id TEXT NOT NULL, course_name TEXT NOT NULL,
+    lecture_label TEXT NOT NULL, reading_text TEXT NOT NULL,
+    detail TEXT, completed_at TEXT, source_page_url TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    week_number INTEGER,
+    lecture_slot TEXT NOT NULL DEFAULT 'unknown',
+    source TEXT NOT NULL DEFAULT 'ai',
+    lecture_date TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS reading_items_course_idx ON reading_items (course_canvas_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS reading_items_unique_idx ON reading_items (course_canvas_id, lecture_label, reading_text, source)`],
+};
 
-async function runColumnMigrations(baseHttps: string, authToken: string): Promise<void> {
-  for (const m of COLUMN_MIGRATIONS) {
-    // pragma_table_info() returns one row per column on the given
-    // table. Table + column names are hard-coded constants (not user
-    // input), so string interpolation is safe.
-    const rows = await queryRaw(
-      baseHttps,
-      authToken,
-      `SELECT name FROM pragma_table_info('${m.table}')`,
-    ).catch(() => []);
-    const names = new Set(rows.map((r) => String(r.name ?? "")));
-    if (!names.has(m.column)) {
-      await executeRaw(baseHttps, authToken, m.ddl);
-    }
-  }
-}
+// Column migrations — run ONE PRAGMA per table (not per column)
+// to batch-check which columns are missing.
+const COLUMN_MIGRATIONS: Record<string, Array<{ column: string; ddl: string }>> = {
+  tasks: [
+    { column: "classification",        ddl: "ALTER TABLE tasks ADD COLUMN classification TEXT NOT NULL DEFAULT 'unclassified'" },
+    { column: "classification_reason", ddl: "ALTER TABLE tasks ADD COLUMN classification_reason TEXT" },
+    { column: "classified_at",         ddl: "ALTER TABLE tasks ADD COLUMN classified_at TEXT" },
+  ],
+  timetable_events: [
+    { column: "source", ddl: "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'" },
+  ],
+  reading_items: [
+    { column: "week_number",  ddl: "ALTER TABLE reading_items ADD COLUMN week_number INTEGER" },
+    { column: "lecture_slot", ddl: "ALTER TABLE reading_items ADD COLUMN lecture_slot TEXT NOT NULL DEFAULT 'unknown'" },
+    { column: "source",       ddl: "ALTER TABLE reading_items ADD COLUMN source TEXT NOT NULL DEFAULT 'ai'" },
+    { column: "lecture_date", ddl: "ALTER TABLE reading_items ADD COLUMN lecture_date TEXT" },
+  ],
+};
 
-/**
- * Send one statement to Turso via the HTTP pipeline API (bypassing
- * @libsql/client's migration-job poller, which runs via global fetch).
- */
-async function executeRaw(baseHttps: string, authToken: string, sql: string): Promise<void> {
-  await queryRaw(baseHttps, authToken, sql);
-}
-
-/**
- * Send one statement and return the parsed result rows. Used for
- * PRAGMA queries during schema bootstrap.
- */
-async function queryRaw(
-  baseHttps: string,
-  authToken: string,
-  sql: string,
-): Promise<Array<Record<string, unknown>>> {
+async function httpQuery(baseHttps: string, authToken: string, sql: string): Promise<Array<Record<string, unknown>>> {
   const res = await fetch(`${baseHttps}/v2/pipeline`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      requests: [
-        { type: "execute", stmt: { sql } },
-        { type: "close" },
-      ],
-    }),
+    headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ type: "execute", stmt: { sql } }, { type: "close" }] }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Turso HTTP ${res.status} on bootstrap: ${sql.split("\n")[0]}\n${text}`);
+    throw new Error(`Turso HTTP ${res.status}: ${sql.slice(0, 60)}\n${text}`);
   }
-  const body = (await res.json().catch(() => null)) as {
+  const body = await res.json().catch(() => null) as {
     results?: Array<{ response?: { result?: { rows?: Array<Record<string, unknown>> } } }>;
   } | null;
   return body?.results?.[0]?.response?.result?.rows ?? [];
 }
 
-/**
- * Run idempotent CREATE TABLE / INDEX IF NOT EXISTS statements on first DB
- * use. Cached as a single promise so concurrent requests don't race.
- *
- * Skip when AUTO_INIT_SCHEMA=false (e.g. for migrations / CI tests).
- */
-async function ensureSchema(): Promise<void> {
-  if (process.env.AUTO_INIT_SCHEMA === "false") return;
-
-  const url       = process.env.TURSO_DATABASE_URL;
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  if (!url || !authToken) return; // getDb() will throw a clearer error on use
-
-  // libsql://host  →  https://host
-  const baseHttps = url.replace(/^libsql:\/\//, "https://");
-
-  for (const sql of SCHEMA_STATEMENTS) {
-    await executeRaw(baseHttps, authToken, sql);
-  }
-  // Column-level migrations for older DBs that have the right tables
-  // but pre-date a later code change (e.g. timetable_events.source).
-  await runColumnMigrations(baseHttps, authToken);
+async function httpExec(baseHttps: string, authToken: string, sql: string): Promise<void> {
+  await httpQuery(baseHttps, authToken, sql);
 }
 
-/**
- * Lazily create the Drizzle client. Throws a clear, readable error if env
- * vars are missing, instead of failing with an opaque "Invalid URL" deep
- * inside the libSQL client when `createClient` is called.
- *
- * Also kicks off schema bootstrap in the background (fire-and-forget).
- * Callers that need the schema to exist before querying should await
- * `dbReady()` first.
- */
-export function getDb(): DrizzleDB {
-  if (_db) return _db;
-
+async function ensureSchema(): Promise<void> {
+  if (process.env.AUTO_INIT_SCHEMA === "false") return;
   const url       = process.env.TURSO_DATABASE_URL;
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const missing = [
-    !url       && "TURSO_DATABASE_URL",
-    !authToken && "TURSO_AUTH_TOKEN",
-  ].filter(Boolean) as string[];
+  if (!url || !authToken) return;
 
-  if (missing.length > 0) {
-    throw new Error(
-      `Database unavailable: missing env var(s): ${missing.join(", ")}. ` +
-      `Add them in Vercel → Settings → Environment Variables, then redeploy.`
-    );
+  const baseHttps = url.replace(/^libsql:\/\//, "https://");
+
+  // 1. Fast path: check all required tables in ONE query
+  const rows = await httpQuery(baseHttps, authToken,
+    `SELECT name FROM sqlite_master WHERE type='table'`
+  );
+  const existing = new Set(rows.map((r) => String(r.name ?? "")));
+  const missing  = REQUIRED_TABLES.filter((t) => !existing.has(t));
+
+  // 2. Create missing tables (usually none after first deploy)
+  for (const table of missing) {
+    for (const ddl of TABLE_DDL[table] ?? []) {
+      await httpExec(baseHttps, authToken, ddl);
+    }
   }
 
+  // 3. Column migrations — one PRAGMA per TABLE (not per column)
+  for (const [table, migrations] of Object.entries(COLUMN_MIGRATIONS)) {
+    if (!existing.has(table) && !missing.includes(table)) continue; // table doesn't exist, skip
+    const colRows = await httpQuery(baseHttps, authToken,
+      `SELECT name FROM pragma_table_info('${table}')`
+    );
+    const cols = new Set(colRows.map((r) => String(r.name ?? "")));
+    for (const m of migrations) {
+      if (!cols.has(m.column)) {
+        await httpExec(baseHttps, authToken, m.ddl);
+      }
+    }
+  }
+}
+
+export function getDb(): DrizzleDB {
+  if (_db) return _db;
+  const url       = process.env.TURSO_DATABASE_URL;
+  const authToken = process.env.TURSO_AUTH_TOKEN;
+  const missing   = [!url && "TURSO_DATABASE_URL", !authToken && "TURSO_AUTH_TOKEN"].filter(Boolean) as string[];
+  if (missing.length > 0) throw new Error(`Missing env vars: ${missing.join(", ")}`);
   const client = createClient({ url: url!, authToken: authToken! });
   _db = drizzle(client, { schema });
-
-  // Kick off schema bootstrap in the background. CREATE TABLE IF NOT
-  // EXISTS is idempotent so the race is benign for fresh DBs, but
-  // column-level ALTERs (added for backward compat with older DBs)
-  // can race against the first query and produce 500s. Callers that
-  // need the schema to exist before the first query should await
-  // `dbReady()`. The page server components already do this implicitly
-  // via their data-fetching await — but the proxy here is sync, so we
-  // leave the comment in place and trust callers.
-  _initPromise ??= ensureSchema().catch((err) => {
-    _initPromise = null; // allow retry on next request
-    throw err;
-  });
-
+  _initPromise ??= ensureSchema().catch((err) => { _initPromise = null; throw err; });
   return _db;
 }
 
-/**
- * Resolves once the DB client is connected AND the schema has been
- * bootstrapped (idempotent CREATE IF NOT EXISTS). Call this from any code
- * path that requires the tables to exist before issuing queries — most
- * importantly from `/api/sync` and `/api/push`, which would otherwise
- * hit "no such table".
- */
 export async function dbReady(): Promise<DrizzleDB> {
   const database = getDb();
-  if (_initPromise) {
-    await _initPromise;
-  }
+  if (_initPromise) await _initPromise;
   return database;
 }
 
-/**
- * Lazy proxy over the Drizzle client. Defers connection until first use
- * and binds each method so Drizzle's internal `this`-chaining works.
- *
- * IMPORTANT: This proxy is synchronous. Drizzle's query builder chains
- * synchronously (db.select(...).from(...).where(...)), so an async get
- * trap would break it by returning Promises instead of actual methods.
- */
 export const db = new Proxy({} as DrizzleDB, {
   get(_target, prop) {
     const real = getDb() as unknown as Record<PropertyKey, unknown>;
