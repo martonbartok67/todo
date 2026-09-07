@@ -156,7 +156,7 @@ async function callGroqWithRetry(
           // the closest free replacement (120B params, json_mode, structured
           // outputs). If you ever see "model not found" again, list available
           // models with: GET https://api.groq.com/openai/v1/models
-          model:       process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
+          model:       process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
           max_tokens:  2048,
           temperature: 0,
           messages: [

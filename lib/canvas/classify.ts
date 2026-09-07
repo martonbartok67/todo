@@ -86,7 +86,7 @@ async function callGroqWithRetry(prompt: string): Promise<ClassifyResult[]> {
           "Authorization": `Bearer ${process.env.GROQ_API_KEY!}`,
         },
         body: JSON.stringify({
-          model:       process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
+          model:       process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
           max_tokens:  2048,
           temperature: 0,
           messages: [
