@@ -58,7 +58,7 @@ export async function addManualReading(input: ReadingInput) {
   const err = validate(input);
   if (err) throw new Error(err);
 
-  await dbReady();
+  
   const courseRows = await db
     .select({ name: courses.name })
     .from(courses)
@@ -92,7 +92,7 @@ export async function editReading(id: number, input: ReadingInput) {
   const err = validate(input);
   if (err) throw new Error(err);
 
-  await dbReady();
+  
   const now = nowIso();
   await db.update(readingItems)
     .set({
@@ -111,7 +111,7 @@ export async function editReading(id: number, input: ReadingInput) {
 
 /** Delete a reading. No confirmation server-side — the UI handles that. */
 export async function deleteReading(id: number) {
-  await dbReady();
+  
   await db.delete(readingItems).where(eq(readingItems.id, id));
   for (const p of REV) revalidatePath(p);
   return { ok: true };
