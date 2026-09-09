@@ -132,18 +132,16 @@ export async function attachTimetableDeadlines(): Promise<{
 
 // ── iCal settings ─────────────────────────────────────────────────────────
 
-export async function saveIcalUrl(formData: FormData) {
-  const url   = String(formData.get("icalUrl") ?? "").trim();
-  const label = String(formData.get("icalLabel") ?? "").trim();
-  const trimmed = url.replace(/\s+/g, "");
-  if (!trimmed) return { error: "URL is required" };
+export async function saveIcalUrl(url: string, label: string | null) {
+  const trimmed = (url ?? "").trim().replace(/\s+/g, "");
+  if (!trimmed) return { status: "error" as const, error: "URL is required" };
   const now = new Date().toISOString();
   await db.insert(userSettings)
     .values({ id: 1, icalUrl: trimmed, icalLabel: label || "My Timetable", createdAt: now, updatedAt: now })
     .onConflictDoUpdate({ target: userSettings.id, set: { icalUrl: trimmed, icalLabel: label || "My Timetable", updatedAt: now } });
   revalidatePath("/timetable");
   revalidatePath("/settings");
-  return { ok: true };
+  return { status: "ok" as const };
 }
 
 export async function clearIcalUrl() {
