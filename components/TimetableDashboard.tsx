@@ -70,7 +70,7 @@ export default function TimetableDashboard({
       if (r.status === "error") {
         setSaveResult(`Error: ${r.error}`);
       } else {
-        setSaveResult(`Saved. Synced ${r.synced} events.${r.error ? " (sync error: " + r.error + ")" : ""}`);
+        setSaveResult(`Saved. Synced ${r.synced} events.`);
       }
     });
   }
