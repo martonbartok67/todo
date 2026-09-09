@@ -79,7 +79,7 @@ export default function TimetableDashboard({
     if (!confirm("Remove the iCal feed and delete all iCal-sourced events? Canvas events are unaffected.")) return;
     startClear(async () => {
       const r = await clearIcalUrl();
-      setSaveResult(`Cleared. Removed ${r.removed} events.`);
+      setSaveResult("Cleared.");
       setIcalInput("");
       setIcalLabel("");
     });
