@@ -145,3 +145,13 @@ export async function saveIcalUrl(formData: FormData) {
   revalidatePath("/settings");
   return { ok: true };
 }
+
+export async function clearIcalUrl() {
+  const now = new Date().toISOString();
+  await db.update(userSettings)
+    .set({ icalUrl: null, icalLabel: null, updatedAt: now })
+    .where(eq(userSettings.id, 1));
+  revalidatePath("/timetable");
+  revalidatePath("/settings");
+  return { ok: true };
+}
