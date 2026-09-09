@@ -2,7 +2,7 @@
 /**
  * Server actions for timetable-related operations.
  */
-import { db, dbReady } from "@/lib/db";
+import { db } from "@/lib/db";
 import { tasks, timetableEvents, userSettings, courses } from "@/drizzle/schema";
 import { eq, and, isNull, gt, asc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
