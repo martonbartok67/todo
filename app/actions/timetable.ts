@@ -74,45 +74,96 @@ async function findEventForWeek(
 
 // ── Main action ────────────────────────────────────────────────────────────
 
+// ── Module → ISO week mapping (hardcoded from course manuals) ─────────────
+// Key: courseCanvasId, value: map of module-number-regex → ISO week
+const MODULE_WEEK_MAP: Record<string, Array<{ pattern: RegExp; week: number }>> = {
+  // BT1201 Introduction to Business
+  "57918": [
+    { pattern: /module\s*1\b/i,  week: 36 },
+    { pattern: /module\s*2\b/i,  week: 37 },
+    { pattern: /module\s*3\b/i,  week: 38 },
+    { pattern: /module\s*4\b/i,  week: 39 },
+    { pattern: /module\s*5\b/i,  week: 40 },
+    { pattern: /module\s*6\b/i,  week: 41 },
+    { pattern: /module\s*7\b/i,  week: 44 },
+    { pattern: /module\s*8\b/i,  week: 45 },
+    { pattern: /module\s*9\b/i,  week: 46 },
+    { pattern: /module\s*10\b/i, week: 47 },
+    { pattern: /module\s*11\b/i, week: 48 },
+    { pattern: /module\s*12\b/i, week: 49 },
+    { pattern: /\bwk36\b/i,      week: 36 },
+    { pattern: /\bwk37\b/i,      week: 37 },
+    { pattern: /\bwk38\b/i,      week: 38 },
+    { pattern: /\bwk39\b/i,      week: 39 },
+    { pattern: /\bwk40\b/i,      week: 40 },
+    { pattern: /\bwk41\b/i,      week: 41 },
+    { pattern: /\bwk44\b/i,      week: 44 },
+    { pattern: /\bwk45\b/i,      week: 45 },
+    { pattern: /\bwk46\b/i,      week: 46 },
+    { pattern: /\bwk47\b/i,      week: 47 },
+    { pattern: /\bwk48\b/i,      week: 48 },
+    { pattern: /\bwk49\b/i,      week: 49 },
+  ],
+  // BT1202 Organisational Behaviour
+  "57916": [
+    { pattern: /\blecture\s*1\b|week\s*36\b/i, week: 36 },
+    { pattern: /\blecture\s*2\b|week\s*37\b/i, week: 37 },
+    { pattern: /\blecture\s*3\b|week\s*38\b/i, week: 38 },
+    { pattern: /\blecture\s*4\b|week\s*39\b/i, week: 39 },
+    { pattern: /\blecture\s*5\b|week\s*40\b/i, week: 40 },
+    { pattern: /\blecture\s*6\b|week\s*41\b/i, week: 41 },
+    { pattern: /\bworkshop\b/i,                   week: 40 },
+  ],
+};
+
+// Courses to skip deadline assignment (not real coursework)
+const SKIP_COURSES = new Set(["43161", "56744", "56741", "42446"]);
+
+function matchModuleWeek(courseCanvasId: string, text: string): number | null {
+  // First try generic week/wk regex
+  const generic = extractWeekNumber(text);
+  if (generic) return generic;
+  // Then try course-specific module patterns
+  const map = MODULE_WEEK_MAP[courseCanvasId];
+  if (!map) return null;
+  for (const { pattern, week } of map) {
+    if (pattern.test(text)) return week;
+  }
+  return null;
+}
+
 export async function attachTimetableDeadlines(): Promise<{
   matched: number; skipped: number; noEvents: number;
 }> {
   let matched = 0, skipped = 0, noEvents = 0;
 
-  // Get all tasks without due_at that are not completed
   const undated = await db.select().from(tasks)
     .where(and(isNull(tasks.dueAt), isNull(tasks.completedAt)));
 
   for (const task of undated) {
-    // Try to extract week number from title or description
-    const weekNum =
-      extractWeekNumber(task.title) ??
-      extractWeekNumber(task.description ?? "") ??
-      extractWeekNumber(task.itemType ?? "");
+    // Skip non-coursework courses
+    if (SKIP_COURSES.has(task.courseCanvasId)) { skipped++; continue; }
 
-    if (!weekNum) {
-      skipped++;
-      continue;
-    }
+    // Try to find a week number from title + description
+    const searchText = [task.title, task.description ?? "", task.itemType ?? ""].join(" ");
+    const weekNum = matchModuleWeek(task.courseCanvasId, searchText);
+
+    if (!weekNum) { skipped++; continue; }
 
     const eventDate = await findEventForWeek(task.courseCanvasId, weekNum);
-    if (!eventDate) {
-      noEvents++;
-      continue;
-    }
+    if (!eventDate) { noEvents++; continue; }
 
-    // Set due_at to 1 hour before lecture start (read before class)
-    const lectureTime = new Date(eventDate);
-    lectureTime.setHours(lectureTime.getHours() - 1);
+    // Due 1 hour before lecture
+    const due = new Date(eventDate);
+    due.setHours(due.getHours() - 1);
 
     await db.update(tasks)
-      .set({ dueAt: lectureTime.toISOString(), updatedAt: new Date().toISOString() })
+      .set({ dueAt: due.toISOString(), updatedAt: new Date().toISOString() })
       .where(eq(tasks.id, task.id));
-
     matched++;
   }
 
-  // Also attach lecture_date to reading_items that have weekNumber but no lectureDate
+  // Attach lecture_date to reading_items with weekNumber but no lectureDate
   const undatedReadings = await db.select().from(readingItems)
     .where(and(isNull(readingItems.lectureDate), not(isNull(readingItems.weekNumber))));
 
