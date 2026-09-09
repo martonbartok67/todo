@@ -141,7 +141,7 @@ export async function saveIcalUrl(url: string, label: string | null) {
     .onConflictDoUpdate({ target: userSettings.id, set: { icalUrl: trimmed, icalLabel: label || "My Timetable", updatedAt: now } });
   revalidatePath("/timetable");
   revalidatePath("/settings");
-  return { status: "ok" as const };
+  return { status: "ok" as const, synced: 0 };
 }
 
 export async function clearIcalUrl() {
