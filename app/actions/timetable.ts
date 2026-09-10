@@ -11,7 +11,7 @@
  */
 import { db } from "@/lib/db";
 import { tasks, timetableEvents, userSettings, readingItems } from "@/drizzle/schema";
-import { eq, isNull, and, gte, lte, like, not } from "drizzle-orm";
+import { eq, isNull, and, gte, lte, like, not, asc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 // ── ISO week helpers ───────────────────────────────────────────────────────
@@ -67,9 +67,17 @@ async function findEventForWeek(
         lte(timetableEvents.startAt, endIso),
       )
     )
-    .limit(1);
+    .orderBy(asc(timetableEvents.startAt));
 
-  return events[0]?.startAt ?? null;
+  if (!events.length) return null;
+
+  // Math: skip Friday workshops, use earliest non-Friday event
+  if (courseCanvasId === "57923") {
+    const nonFriday = events.find((e) => new Date(e.startAt).getUTCDay() !== 5);
+    return (nonFriday ?? events[0]).startAt;
+  }
+
+  return events[0].startAt;
 }
 
 // ── Main action ────────────────────────────────────────────────────────────
@@ -116,10 +124,23 @@ const MODULE_WEEK_MAP: Record<string, Array<{ pattern: RegExp; week: number }>> 
   ],
 };
 
+// Math: Unit X.Y → course week X → ISO week = 35 + X
+// e.g. Unit 3.1 → week 3 → ISO 38. Week N title → ISO 35 + N.
+// Handled separately in matchModuleWeek() below.
+
 // Courses to skip deadline assignment (not real coursework)
 const SKIP_COURSES = new Set(["43161", "56744", "56741", "42446"]);
 
 function matchModuleWeek(courseCanvasId: string, text: string): number | null {
+  // Math (BT1304): Unit X.Y → course week X → ISO week 35 + X
+  if (courseCanvasId === "57923") {
+    // "Unit 3.1", "Unit 3.2", "Week 3 - Math Skills" etc.
+    const unitMatch = text.match(/\bunit\s*(\d+)\./i);
+    if (unitMatch) return 35 + parseInt(unitMatch[1], 10);
+    const weekMatch = text.match(/\bweek\s*(\d+)/i);
+    if (weekMatch) return 35 + parseInt(weekMatch[1], 10);
+    return null;
+  }
   // First try generic week/wk regex
   const generic = extractWeekNumber(text);
   if (generic) return generic;
