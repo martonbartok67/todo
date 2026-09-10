@@ -57,16 +57,10 @@ export function ResourcesDashboard({ items }: { items: EnrichedResource[] }) {
 
       {items.length === 0 && (
         <div className="rounded-xl bg-surface-1 border border-border px-4 py-5 text-sm text-muted space-y-2">
-          <p className="text-foreground font-medium">No resources classified yet</p>
+          <p className="text-foreground font-medium">No resources yet</p>
           <p>
-            Run a manual classification pass to flag informational Canvas
-            items. Hit <code className="font-mono text-foreground/80">POST /api/sync?phase=classify&courseId=YOUR_COURSE_ID</code>{" "}
-            (with the <code className="font-mono text-foreground/80">Authorization: Bearer $CRON_SECRET</code>{" "}
-            header) for each of your courses, or trigger one from the
-            cron workflow.
-          </p>
-          <p className="text-[11px] text-muted/80">
-            Until then, every Canvas item shows up in the Tasks list.
+            Resources include Canvas slides, files, and pages without a deadline,
+            plus items the AI classified as informational. Trigger a sync to populate this list.
           </p>
         </div>
       )}
