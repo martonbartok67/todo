@@ -132,20 +132,39 @@ const MODULE_WEEK_MAP: Record<string, Array<{ pattern: RegExp; week: number }>> 
 const SKIP_COURSES = new Set(["43161", "56744", "56741", "42446"]);
 
 function matchModuleWeek(courseCanvasId: string, text: string): number | null {
-  // Math (BT1304) and IB (BT1201): Unit/Module X.Y or X → ISO week 35 + X
-  // Module 1 = wk36, Module 2 = wk37 ... offset = 35
-  if (courseCanvasId === "57923" || courseCanvasId === "57918") {
-    // "Unit 3.1", "3.2", "Module 3", "Week 3" etc.
-    const dotMatch  = text.match(/\b(\d+)\.(\d+)/);           // X.Y
+  // Math (BT1304): Unit/Week X.Y → ISO week 35 + X (no block gap, linear)
+  if (courseCanvasId === "57923") {
+    const dotMatch  = text.match(/\b(\d+)\.(\d+)/);
     if (dotMatch) return 35 + parseInt(dotMatch[1], 10);
-    const unitMatch = text.match(/\bunit\s*(\d+)\b/i);        // Unit X
+    const unitMatch = text.match(/\bunit\s*(\d+)\b/i);
     if (unitMatch) return 35 + parseInt(unitMatch[1], 10);
-    const modMatch  = text.match(/\bmodule\s*(\d+)\b/i);      // Module X
-    if (modMatch) return 35 + parseInt(modMatch[1], 10);
-    const weekMatch = text.match(/\bweek\s*(\d+)\b/i);        // Week X
+    const weekMatch = text.match(/\bweek\s*(\d+)\b/i);
     if (weekMatch) return 35 + parseInt(weekMatch[1], 10);
-    const wkMatch   = text.match(/\bwk(\d+)\b/i);              // wk36
-    if (wkMatch) return parseInt(wkMatch[1], 10);                 // already ISO
+    const wkMatch   = text.match(/\bwk(\d+)\b/i);
+    if (wkMatch) return parseInt(wkMatch[1], 10);
+    return null;
+  }
+
+  // IB (BT1201): Module X.Y or X — explicit mapping from course manual
+  // Block 1: modules 1-6 → wk36-41. Gap: wk42-43 (exams+self study).
+  // Block 2: modules 7-12 → wk44-49.
+  if (courseCanvasId === "57918") {
+    const IB_MODULE_WEEK: Record<number, number> = {
+      1: 36, 2: 37, 3: 38, 4: 39, 5: 40, 6: 41,
+      7: 44, 8: 45, 9: 46, 10: 47, 11: 48, 12: 49,
+    };
+    // Extract module number from "X.Y", "Module X", "X " patterns
+    const dotMatch = text.match(/\b(\d+)\.(\d+)/);
+    const modNum   = dotMatch
+      ? parseInt(dotMatch[1], 10)
+      : (() => {
+          const m = text.match(/\bmodule\s*(\d+)\b/i) ?? text.match(/\b(\d+)\b/);
+          return m ? parseInt(m[1], 10) : null;
+        })();
+    if (modNum !== null && IB_MODULE_WEEK[modNum]) return IB_MODULE_WEEK[modNum];
+    // Fallback: wkXX already ISO
+    const wkMatch = text.match(/\bwk(\d+)\b/i);
+    if (wkMatch) return parseInt(wkMatch[1], 10);
     return null;
   }
   // First try generic week/wk regex
@@ -184,6 +203,11 @@ export async function attachTimetableDeadlines(): Promise<{
     // Due 1 hour before lecture
     const due = new Date(eventDate);
     due.setHours(due.getHours() - 1);
+
+    // Remedial Quiz gets +2 days after the lecture date
+    if (/remedial\s*quiz/i.test(task.title)) {
+      due.setDate(due.getDate() + 2);
+    }
 
     await db.update(tasks)
       .set({ dueAt: due.toISOString(), updatedAt: new Date().toISOString() })

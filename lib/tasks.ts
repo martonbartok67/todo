@@ -56,6 +56,7 @@ async function fetchPendingRows() {
 
 function enrich(rows: Awaited<ReturnType<typeof fetchPendingRows>>): EnrichedTask[] {
   return rows
+    .filter(({ task }) => !isNonTask(task.title, task.itemType))
     .map(({ task, courseName, accentColor }) => ({
       ...task,
       urgency:     getUrgency(task.dueAt),
@@ -70,6 +71,25 @@ function enrich(rows: Awaited<ReturnType<typeof fetchPendingRows>>): EnrichedTas
       if (b.dueAt) return 1;
       return a.title.localeCompare(b.title);
     });
+}
+
+
+// ── Non-task filter ───────────────────────────────────────────────────────
+// Items that look like reading/reference material, not actionable tasks.
+// Links are KEPT (they are usually task pages). Only remove slidedecks,
+// PDFs, text-entry submissions, and remedial quiz (offset +2 days handled
+// in deadline attachment).
+function isNonTask(title: string, itemType: string | null): boolean {
+  const t = title.toLowerCase();
+  const type = (itemType ?? "").toLowerCase();
+  // Slide decks and PDFs
+  if (/slide\s*deck|slides?\.pdf|slidedeck/i.test(title)) return true;
+  if (/\bclips?\s+slide/i.test(title)) return true;
+  // Text entry = submission type, not a task to read
+  if (type === "online_text_entry") return true;
+  // Raw PDF files that are clearly reference material
+  if (type === "file" && /\.pdf$/i.test(title) && !/quiz|exam|assignment|exercise/i.test(title)) return true;
+  return false;
 }
 
 /** Flat list sorted by urgency then due date. */
