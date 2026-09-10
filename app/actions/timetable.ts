@@ -132,13 +132,20 @@ const MODULE_WEEK_MAP: Record<string, Array<{ pattern: RegExp; week: number }>> 
 const SKIP_COURSES = new Set(["43161", "56744", "56741", "42446"]);
 
 function matchModuleWeek(courseCanvasId: string, text: string): number | null {
-  // Math (BT1304): Unit X.Y → course week X → ISO week 35 + X
-  if (courseCanvasId === "57923") {
-    // "Unit 3.1", "Unit 3.2", "Week 3 - Math Skills" etc.
-    const unitMatch = text.match(/\bunit\s*(\d+)\./i);
+  // Math (BT1304) and IB (BT1201): Unit/Module X.Y or X → ISO week 35 + X
+  // Module 1 = wk36, Module 2 = wk37 ... offset = 35
+  if (courseCanvasId === "57923" || courseCanvasId === "57918") {
+    // "Unit 3.1", "3.2", "Module 3", "Week 3" etc.
+    const dotMatch  = text.match(/\b(\d+)\.(\d+)/);           // X.Y
+    if (dotMatch) return 35 + parseInt(dotMatch[1], 10);
+    const unitMatch = text.match(/\bunit\s*(\d+)\b/i);        // Unit X
     if (unitMatch) return 35 + parseInt(unitMatch[1], 10);
-    const weekMatch = text.match(/\bweek\s*(\d+)/i);
+    const modMatch  = text.match(/\bmodule\s*(\d+)\b/i);      // Module X
+    if (modMatch) return 35 + parseInt(modMatch[1], 10);
+    const weekMatch = text.match(/\bweek\s*(\d+)\b/i);        // Week X
     if (weekMatch) return 35 + parseInt(weekMatch[1], 10);
+    const wkMatch   = text.match(/\bwk(\d+)\b/i);              // wk36
+    if (wkMatch) return parseInt(wkMatch[1], 10);                 // already ISO
     return null;
   }
   // First try generic week/wk regex
