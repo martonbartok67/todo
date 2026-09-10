@@ -170,7 +170,15 @@ export async function getInfoResources(): Promise<EnrichedResource[]> {
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
     .from(tasks)
     .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
-    .where(eq(tasks.classification, "info"))
+    .where(
+      and(
+        isNull(tasks.completedAt),
+        or(
+          eq(tasks.classification, "info"),
+          isNull(tasks.dueAt)             // undated → treat as resource/reading material
+        )
+      )
+    )
     .orderBy(desc(tasks.classifiedAt));
   return rows.map(({ task, courseName, accentColor }) => ({
     ...task,
