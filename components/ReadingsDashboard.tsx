@@ -31,8 +31,22 @@ function groupReadings(items: ReadingItem[]): CourseGroup[] {
   return Array.from(courseMap.values());
 }
 
-function fallbackColor(name: string): string {
-  const colors = ["#6366f1","#8b5cf6","#06b6d4","#10b981","#f59e0b","#ef4444"];
+const COURSE_COLORS: Record<string, string> = {
+  Economics:     "#2C6958",
+  Mathematics:   "#7A4F83",
+  Statistics:    "#286982",
+  Marketing:     "#3D7C6F",
+  Psychology:    "#C9991A",
+  Strategy:      "#D4574D",
+  Biology:       "#6B73AA",
+  Communication: "#557AA3",
+};
+
+function courseColor(name: string): string {
+  for (const [key, val] of Object.entries(COURSE_COLORS)) {
+    if (name.toLowerCase().includes(key.toLowerCase())) return val;
+  }
+  const colors = ["#2C6958","#7A4F83","#286982","#3D7C6F","#C9991A","#D4574D","#6B73AA","#557AA3"];
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % colors.length;
   return colors[Math.abs(h)];
@@ -49,9 +63,6 @@ export default function ReadingsDashboard({
   const groups    = groupReadings(items);
   const doneCount = items.filter((i) => i.completedAt).length;
 
-  // Sheet state. `null` = closed, otherwise the reading being added/edited.
-  // `mode` distinguishes add vs edit so the sheet copy + submit button
-  // stay accurate.
   const [sheet, setSheet] = useState<{
     mode: "add" | "edit";
     reading: SheetReading | null;
@@ -62,81 +73,150 @@ export default function ReadingsDashboard({
 
   return (
     <>
-      <header className="flex items-center justify-between mb-5 gap-3">
-        <div className="min-w-0">
-          <h1 className="text-lg md:text-base font-semibold tracking-tight">Readings</h1>
-          <p className="text-xs text-muted mt-0.5 tabular-nums">
-            {items.length > 0
-              ? `${doneCount}/${items.length} complete · AI-extracted from course manuals`
-              : "AI-extracted from course manuals"}
-          </p>
+      {/* Sticky header */}
+      <header
+        className="sticky top-0 z-30 md:relative"
+        style={{
+          paddingTop: "54px",
+          paddingLeft: "18px",
+          paddingRight: "18px",
+          paddingBottom: "12px",
+          background: "color-mix(in srgb, var(--background) 95%, transparent)",
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
+          marginBottom: "0",
+        }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 style={{ fontSize: "24px", fontWeight: 800, lineHeight: 1.2, color: "var(--foreground)" }}>
+              Readings
+            </h1>
+            <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }} className="tabular-nums">
+              {items.length > 0
+                ? `${doneCount}/${items.length} complete`
+                : "AI-extracted from course manuals"}
+            </p>
+          </div>
+          <button
+            onClick={() => setSheet({ mode: "add", reading: null })}
+            style={{
+              flexShrink: 0,
+              padding: "6px 14px",
+              fontSize: "12px",
+              fontWeight: 600,
+              borderRadius: "9px",
+              border: "1px solid var(--border)",
+              background: "var(--surface-1)",
+              color: "var(--foreground)",
+              cursor: "pointer",
+            }}
+          >
+            + Add
+          </button>
         </div>
-        <button
-          onClick={() => setSheet({ mode: "add", reading: null })}
-          className="shrink-0 px-3 py-1.5 text-[11px] font-medium rounded-lg border border-border bg-surface-1 hover:bg-surface-2 transition-colors"
-        >
-          + Add reading
-        </button>
       </header>
 
-      {/* Table not ready */}
-      {!tableReady && (
-        <div className="rounded-xl bg-surface-1 border border-border px-4 py-5 text-sm text-muted">
-          <p className="text-foreground font-medium mb-1">Database table missing</p>
-          <p>Run <code className="text-[#6366f1]">npx drizzle-kit push</code> locally to create the <code className="text-[#6366f1]">reading_items</code> table, then trigger a sync.</p>
-        </div>
-      )}
+      <div style={{ padding: "18px 16px", paddingBottom: "88px" }} className="md:!p-0">
+        {/* Table not ready */}
+        {!tableReady && (
+          <div
+            style={{
+              borderRadius: "16px",
+              background: "var(--surface-card)",
+              padding: "20px",
+              fontSize: "14px",
+              color: "var(--muted)",
+              marginBottom: "22px",
+            }}
+          >
+            <p style={{ color: "var(--foreground)", fontWeight: 600, marginBottom: "4px" }}>
+              Database table missing
+            </p>
+            <p>Run <code style={{ color: "var(--accent)" }}>npx drizzle-kit push</code> locally.</p>
+          </div>
+        )}
 
-      {/* Empty — table exists but no readings yet */}
-      {tableReady && items.length === 0 && (
-        <div className="rounded-xl bg-surface-1 border border-border px-4 py-5 text-sm text-muted">
-          <p className="text-foreground font-medium mb-1">No readings extracted yet</p>
-          <p>Make sure <code className="text-[#6366f1]">GROQ_API_KEY</code> is set in Vercel env vars, then trigger a manual sync.</p>
-          <p className="mt-2 text-[11px]">Readings are only extracted from Canvas pages whose title or content contains keywords like "syllabus", "reading list", "course manual", or "studiemateriaal".</p>
-        </div>
-      )}
+        {tableReady && items.length === 0 && (
+          <div
+            style={{
+              borderRadius: "16px",
+              background: "var(--surface-card)",
+              padding: "20px",
+              fontSize: "14px",
+              color: "var(--muted)",
+              marginBottom: "22px",
+            }}
+          >
+            <p style={{ color: "var(--foreground)", fontWeight: 600, marginBottom: "4px" }}>
+              No readings extracted yet
+            </p>
+            <p>Make sure <code style={{ color: "var(--accent)" }}>GROQ_API_KEY</code> is set, then trigger a sync.</p>
+          </div>
+        )}
 
-      {/* Readings list */}
-      {groups.map((course) => {
-        const accent      = fallbackColor(course.courseName);
-        const courseDone  = course.lectures.flatMap((l) => l.items).filter((i) => i.completedAt).length;
-        const courseTotal = course.lectures.flatMap((l) => l.items).length;
+        {/* Readings list */}
+        {groups.map((course) => {
+          const accent      = courseColor(course.courseName);
+          const courseDone  = course.lectures.flatMap((l) => l.items).filter((i) => i.completedAt).length;
+          const courseTotal = course.lectures.flatMap((l) => l.items).length;
 
-        return (
-          <section key={course.courseCanvasId} className="mb-7">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: accent }} />
-              <p className="text-[11px] font-medium uppercase tracking-widest text-muted flex-1 truncate">
-                {course.courseName}
-              </p>
-              <span className="text-[11px] text-muted/70 shrink-0 tabular-nums">{courseDone}/{courseTotal}</span>
-            </div>
-
-            {course.lectures.map((lecture) => (
-              <div key={lecture.label} className="mb-4">
-                <p className="text-[11px] text-[#6366f1] font-medium uppercase tracking-widest mb-1.5 ml-1">
-                  {lecture.label}
+          return (
+            <section key={course.courseCanvasId} style={{ marginBottom: "22px" }}>
+              {/* Course header */}
+              <div className="flex items-center gap-2" style={{ marginBottom: "8px" }}>
+                <span
+                  style={{ width: "8px", height: "8px", borderRadius: "50%", background: accent, flexShrink: 0 }}
+                />
+                <p
+                  style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)", flex: 1, minWidth: 0 }}
+                  className="truncate"
+                >
+                  {course.courseName}
                 </p>
-                <ul className="space-y-1.5">
-                  <AnimatePresence mode="popLayout">
-                    {lecture.items.map((item) => (
-                      <ReadingRow
-                        key={item.id}
-                        item={item}
-                        onComplete={handleComplete}
-                        onUncomplete={handleUncomplete}
-                        onEdit={(it) => setSheet({ mode: "edit", reading: it })}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </ul>
+                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }} className="tabular-nums">
+                  {courseDone}/{courseTotal}
+                </span>
               </div>
-            ))}
-          </section>
-        );
-      })}
 
-      {/* Manual reading side-sheet (add + edit + delete). */}
+              {course.lectures.map((lecture) => (
+                <div key={lecture.label} style={{ marginBottom: "14px" }}>
+                  {/* Lecture sublabel in accent color */}
+                  <p
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      color: "var(--accent)",
+                      marginBottom: "6px",
+                      marginLeft: "2px",
+                    }}
+                  >
+                    {lecture.label}
+                  </p>
+
+                  {/* Panel */}
+                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                    <ul>
+                      <AnimatePresence mode="popLayout">
+                        {lecture.items.map((item) => (
+                          <ReadingRow
+                            key={item.id}
+                            item={item}
+                            onComplete={handleComplete}
+                            onUncomplete={handleUncomplete}
+                            onEdit={(it) => setSheet({ mode: "edit", reading: it })}
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </ul>
+                  </div>
+                </div>
+              ))}
+            </section>
+          );
+        })}
+      </div>
+
       {sheet && (
         <ReadingSheet
           mode={sheet.mode}

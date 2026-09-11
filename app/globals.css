@@ -2,35 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap');
+
 @layer base {
   :root {
-    --background:      0 0% 99%;
-    --foreground:      240 12% 8%;
-    --border:          240 6% 88%;
-    --muted:           240 5% 52%;
+    --background:      #F2F5F2;
+    --foreground:      #1B241F;
+    --border:          #D9E1DB;
+    --muted:           #69756E;
 
-    --surface-1:       240 6% 95%;
-    --surface-2:       240 6% 90%;
-    --surface-3:       240 6% 85%;
-    --surface-default: 240 12% 8%;
+    --surface-1:       #EDF0ED;
+    --surface-2:       #E5E9E6;
+    --surface-3:       #DDE2DE;
+    --surface-card:    #FFFFFF;
 
-    --accent:          245 70% 60%;   /* indigo */
-    --accent-fg:       0 0% 100%;
+    --accent:          #2C6958;
+    --accent-fg:       #FFFFFF;
+
+    --urgency-critical: #D4574D;
+    --urgency-high:     #E0823A;
+    --urgency-medium:   #C9991A;
+    --urgency-low:      #557AA3;
   }
 
   .dark {
-    --background:      240 12% 6%;
-    --foreground:      0 0% 93%;
-    --border:          240 6% 14%;
-    --muted:           240 5% 52%;
+    --background:      #111713;
+    --foreground:      #F1F5F1;
+    --border:          #303C34;
+    --muted:           #9DAAA2;
 
-    --surface-1:       240 8% 10%;
-    --surface-2:       240 7% 14%;
-    --surface-3:       240 7% 18%;
-    --surface-default: 240 12% 6%;
+    --surface-1:       #222D26;
+    --surface-2:       #2A3830;
+    --surface-3:       #303F38;
+    --surface-card:    #19211C;
 
-    --accent:          245 70% 62%;
-    --accent-fg:       0 0% 100%;
+    --accent:          #72C5A5;
+    --accent-fg:       #111713;
+
+    --urgency-critical: #D4574D;
+    --urgency-high:     #E0823A;
+    --urgency-medium:   #C9991A;
+    --urgency-low:      #557AA3;
   }
 }
 
@@ -48,11 +60,15 @@ html, body {
 }
 
 body {
-  @apply bg-background text-foreground;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Nunito', ui-rounded, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: 0;
   font-feature-settings: "kern" 1, "liga" 1;
 }
 
 /* Scrollbar — minimal, theme-aware */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }

@@ -15,21 +15,21 @@ export function PageChrome({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-background text-foreground flex">
+    <div className="min-h-screen flex" style={{ background: "var(--background)", color: "var(--foreground)" }}>
       {/* Desktop sidebar — hidden on mobile */}
       <Sidebar active={active} course={course} />
 
       {/* Main column */}
       <main className="flex-1 min-w-0">
-        <div className="max-w-2xl mx-auto px-4 pt-5 pb-28 md:pt-6 md:pb-8">
+        <div className="max-w-2xl mx-auto md:px-4 md:pt-6 md:pb-8">
 
           {/* Mobile subject breadcrumb — only shown on subject pages */}
           {course && (
-            <div className="md:hidden mb-4 flex items-center gap-2">
-              <Link href="/" className="text-[11px] text-muted hover:text-foreground transition-colors">
+            <div className="md:hidden px-4 pt-16 pb-2 flex items-center gap-2">
+              <Link href="/" className="text-[11px]" style={{ color: "var(--muted)" }}>
                 ← Tasks
               </Link>
-              <span className="text-muted text-[11px]">/</span>
+              <span className="text-[11px]" style={{ color: "var(--muted)" }}>/</span>
               <span className="text-[11px] font-medium truncate">{course.name}</span>
             </div>
           )}
@@ -39,7 +39,9 @@ export function PageChrome({
             <ThemeToggle />
           </div>
 
-          {children}
+          <div className="px-4 pt-4 pb-[88px] md:px-0 md:pt-0 md:pb-0">
+            {children}
+          </div>
         </div>
       </main>
 

@@ -8,64 +8,39 @@ const TABS: Tab[] = [
   { id: "tasks",     label: "Tasks",    href: "/",          icon: <TasksIcon /> },
   { id: "readings",  label: "Readings", href: "/readings",  icon: <ReadingsIcon /> },
   { id: "timetable", label: "Schedule", href: "/timetable", icon: <TimetableIcon /> },
-  { id: "resources", label: "Resources",href: "/resources", icon: <ResourcesIcon /> },
-  { id: "settings",  label: "",         href: "/settings",  icon: <SettingsIcon /> },
+  { id: "resources", label: "Files",    href: "/resources", icon: <ResourcesIcon /> },
+  { id: "settings",  label: "Settings", href: "/settings",  icon: <SettingsIcon /> },
 ];
 
 export function BottomTabs({ active }: { active: string }) {
   return (
     <nav
       aria-label="Primary navigation"
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-background/95 backdrop-blur-md border-t border-border"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 backdrop-blur-2xl"
+      style={{
+        background: "color-mix(in srgb, var(--background) 97%, transparent)",
+        borderTop: "1px solid var(--border)",
+        paddingBottom: "calc(8px + env(safe-area-inset-bottom))",
+      }}
     >
-      <ul className="flex max-w-2xl mx-auto">
-        {/* Main tabs — equal width, fill available space */}
-        {TABS.slice(0, 4).map((t) => {
+      <ul className="flex max-w-2xl mx-auto px-1 pt-2">
+        {TABS.map((t) => {
           const isActive = t.id === active;
           return (
             <li key={t.id} className="flex-1">
               <Link
                 href={t.href}
                 aria-current={isActive ? "page" : undefined}
-                className={[
-                  "flex flex-col items-center justify-center gap-1 py-3 w-full text-[10px] font-medium transition-colors relative",
-                  isActive ? "text-foreground" : "text-muted hover:text-foreground/70",
-                ].join(" ")}
+                className="flex flex-col items-center justify-center gap-[3px] w-full"
+                style={{ color: isActive ? "var(--accent)" : "var(--muted)" }}
               >
-                {isActive && (
-                  <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-[2px] bg-foreground rounded-full" />
-                )}
                 <span className="w-[22px] h-[22px]">{t.icon}</span>
-                <span>{t.label}</span>
+                <span style={{ fontSize: "10px", fontWeight: 700, lineHeight: 1 }}>{t.label}</span>
               </Link>
             </li>
           );
         })}
-
-        {/* Settings — small gear icon, no label, fixed narrow width */}
-        {(() => {
-          const t = TABS[4];
-          const isActive = t.id === active;
-          return (
-            <li className="w-10 flex items-center justify-center">
-              <Link
-                href={t.href}
-                aria-current={isActive ? "page" : undefined}
-                aria-label="Settings"
-                className={[
-                  "flex items-center justify-center w-8 h-8 rounded-lg transition-colors relative",
-                  isActive
-                    ? "text-foreground bg-surface-2"
-                    : "text-muted hover:text-foreground",
-                ].join(" ")}
-              >
-                <span className="w-[17px] h-[17px]">{t.icon}</span>
-              </Link>
-            </li>
-          );
-        })()}
       </ul>
-      <div className="h-[env(safe-area-inset-bottom)]" />
     </nav>
   );
 }

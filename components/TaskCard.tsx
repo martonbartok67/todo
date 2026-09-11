@@ -5,23 +5,12 @@ import { completeTask, uncompleteTask } from "@/app/actions/tasks";
 import type { EnrichedTask, UrgencyLevel } from "@/lib/tasks";
 import { formatDateTimeShort } from "@/lib/format";
 
-const URGENCY_LEFT: Record<UrgencyLevel, string> = {
-  critical: "border-l-[#ef4444]",
-  high:     "border-l-[#f97316]",
-  medium:   "border-l-[#eab308]",
-  low:      "border-l-[#6366f1]",
-  none:     "border-l-transparent",
-};
-
-const URGENCY_DOT: Record<UrgencyLevel, string> = {
-  critical: "bg-[#ef4444]", high: "bg-[#f97316]",
-  medium:   "bg-[#eab308]", low:  "bg-[#6366f1]", none: "bg-muted",
-};
-
-const URGENCY_RING: Record<UrgencyLevel, string> = {
-  critical: "hover:border-[#ef4444]", high: "hover:border-[#f97316]",
-  medium:   "hover:border-[#eab308]", low:  "hover:border-[#6366f1]",
-  none:     "hover:border-muted",
+const URGENCY_COLOR: Record<UrgencyLevel, string> = {
+  critical: "var(--urgency-critical)",
+  high:     "var(--urgency-high)",
+  medium:   "var(--urgency-medium)",
+  low:      "var(--urgency-low)",
+  none:     "var(--muted)",
 };
 
 const ITEM_TYPE_LABEL: Record<string, string> = {
@@ -50,6 +39,7 @@ export function TaskCard({
   const done       = !!task.completedAt;
   const hasContent = !!task.description;
   const typeLabel  = task.itemType ? (ITEM_TYPE_LABEL[task.itemType] ?? null) : null;
+  const urgencyColor = URGENCY_COLOR[done ? "none" : task.urgency];
 
   const handleToggle = () => {
     startTransition(() => {
@@ -70,67 +60,94 @@ export function TaskCard({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -16 }}
       transition={{ duration: 0.15 }}
-      className={[
-        "rounded-xl bg-surface-1 border border-border border-l-2 overflow-hidden transition-opacity",
-        URGENCY_LEFT[done ? "none" : task.urgency],
-        isPending ? "opacity-60" : "",
-      ].join(" ")}
+      style={{
+        borderBottom: "1px solid var(--border)",
+        opacity: isPending ? 0.6 : 1,
+        transition: "opacity 0.15s",
+      }}
     >
-      <div className="flex items-start gap-3 px-3 py-3">
-        {/* Complete toggle */}
+      <div
+        className="flex items-start gap-3"
+        style={{ padding: "14px" }}
+      >
+        {/* 22×22 circle checkbox */}
         <button
           disabled={disabled || isPending}
           onClick={handleToggle}
-          className={[
-            "mt-0.5 shrink-0 w-[18px] h-[18px] rounded-full border transition-all flex items-center justify-center",
-            done
-              ? "bg-foreground border-foreground"
-              : ["border-border", URGENCY_RING[task.urgency]].join(" "),
-            disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
-          ].join(" ")}
+          style={{
+            marginTop: "1px",
+            flexShrink: 0,
+            width: "22px",
+            height: "22px",
+            borderRadius: "50%",
+            border: `2px solid ${done ? "var(--muted)" : urgencyColor}`,
+            background: done ? "var(--muted)" : "transparent",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: disabled ? "not-allowed" : "pointer",
+            opacity: disabled ? 0.4 : 1,
+            transition: "all 0.15s",
+          }}
           aria-label={done ? "Mark incomplete" : "Mark complete"}
         >
-          {done && <span className="text-[9px] text-background leading-none font-bold">✓</span>}
+          {done && (
+            <span style={{ color: "white", fontSize: "10px", fontWeight: 700, lineHeight: 1 }}>✓</span>
+          )}
         </button>
 
         {/* Content */}
         <div
-          className={["flex-1 min-w-0", hasContent ? "cursor-pointer" : ""].join(" ")}
+          className="flex-1 min-w-0"
+          style={{ cursor: hasContent ? "pointer" : "default" }}
           onClick={() => hasContent && setExpanded(v => !v)}
         >
+          {/* Title row */}
           <div className="flex items-start gap-1.5">
-            <p className={[
-              "text-[13px] font-medium leading-snug flex-1 min-w-0",
-              done ? "line-through text-muted" : "text-foreground",
-            ].join(" ")}>
+            <p
+              style={{
+                fontSize: "14px",
+                fontWeight: 600,
+                lineHeight: 1.3,
+                flex: 1,
+                minWidth: 0,
+                color: done ? "var(--muted)" : "var(--foreground)",
+                textDecoration: done ? "line-through" : "none",
+              }}
+            >
               {task.title}
             </p>
             {hasContent && (
-              <span className="shrink-0 text-muted/50 text-[9px] mt-0.5 select-none">
+              <span style={{ flexShrink: 0, color: "var(--muted)", fontSize: "9px", marginTop: "2px" }}>
                 {expanded ? "▴" : "▾"}
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${URGENCY_DOT[done ? "none" : task.urgency]}`} />
-            <span className="text-[11px] text-muted truncate">{task.courseName}</span>
+          {/* Metadata row */}
+          <div className="flex items-center gap-1 flex-wrap" style={{ marginTop: "4px" }}>
+            <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)" }}>
+              {task.courseName}
+            </span>
             {typeLabel && (
-              <span className="text-[10px] text-muted/70 bg-surface-2 border border-border rounded-md px-1.5 py-0.5 leading-none">
-                {typeLabel}
-              </span>
+              <span style={{ fontSize: "11px", color: "var(--muted)" }}>· {typeLabel}</span>
             )}
             {task.pointsPossible != null && (
-              <span className="text-[10px] text-muted tabular-nums">{task.pointsPossible}pt</span>
+              <span style={{ fontSize: "11px", color: "var(--muted)" }} className="tabular-nums">
+                · {task.pointsPossible}pt
+              </span>
             )}
             <span className="ml-auto shrink-0">
               {task.dueAt && !done && (
-                <span className="text-[11px] text-muted tabular-nums">
+                <span
+                  style={{ fontSize: "12px", fontWeight: 700, color: urgencyColor }}
+                  className="tabular-nums"
+                >
                   {formatDateTimeShort(task.dueAt)}
                 </span>
               )}
               {done && task.completedAt && (
-                <span className="text-[11px] text-muted tabular-nums">
+                <span style={{ fontSize: "11px", color: "var(--muted)" }} className="tabular-nums">
                   ✓ {formatDateTimeShort(task.completedAt)}
                 </span>
               )}
@@ -145,7 +162,8 @@ export function TaskCard({
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="shrink-0 text-muted/60 hover:text-foreground transition-colors mt-0.5 text-sm"
+            style={{ flexShrink: 0, color: "var(--muted)", fontSize: "14px", marginTop: "2px" }}
+            className="hover:opacity-80 transition-opacity"
           >↗</a>
         )}
       </div>
@@ -158,10 +176,10 @@ export function TaskCard({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.18 }}
-            className="overflow-hidden"
+            style={{ overflow: "hidden" }}
           >
-            <div className="px-3 pb-3 pt-0 border-t border-border">
-              <p className="text-[12px] text-muted leading-relaxed whitespace-pre-wrap mt-2.5">
+            <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--border)" }}>
+              <p style={{ fontSize: "12px", color: "var(--muted)", lineHeight: 1.6, marginTop: "10px", whiteSpace: "pre-wrap" }}>
                 {task.description}
               </p>
             </div>

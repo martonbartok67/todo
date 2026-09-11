@@ -16,21 +16,38 @@ type Props = {
   lastSync:  SyncLog | null;
 };
 
-// Section labels + colors used by the urgency view. The dot/ring tokens
-// live inside `TaskCard` itself.
 const URGENCY_SECTION: Record<UrgencyLevel, { label: string; color: string }> = {
-  critical: { label: "Overdue / Due < 24h", color: "text-[#ef4444]" },
-  high:     { label: "Due within 48h",      color: "text-[#f97316]" },
-  medium:   { label: "This week",           color: "text-[#eab308]" },
-  low:      { label: "Upcoming",            color: "text-[#6366f1]" },
-  none:     { label: "No due date",         color: "text-muted" },
+  critical: { label: "Overdue / Due < 24h", color: "var(--urgency-critical)" },
+  high:     { label: "Due within 48h",      color: "var(--urgency-high)" },
+  medium:   { label: "This week",           color: "var(--urgency-medium)" },
+  low:      { label: "Upcoming",            color: "var(--urgency-low)" },
+  none:     { label: "No due date",         color: "var(--muted)" },
+};
+
+const COURSE_COLORS: Record<string, string> = {
+  Economics:     "#2C6958",
+  Mathematics:   "#7A4F83",
+  Statistics:    "#286982",
+  Marketing:     "#3D7C6F",
+  Psychology:    "#C9991A",
+  Strategy:      "#D4574D",
+  Biology:       "#6B73AA",
+  Communication: "#557AA3",
 };
 
 function fallbackColor(name: string): string {
-  const colors = ["#6366f1","#8b5cf6","#06b6d4","#10b981","#f59e0b","#ef4444"];
+  const colors = ["#2C6958","#7A4F83","#286982","#3D7C6F","#C9991A","#D4574D","#6B73AA","#557AA3"];
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % colors.length;
   return colors[Math.abs(h)];
+}
+
+function courseColor(name: string, accentColor?: string | null): string {
+  if (accentColor) return accentColor;
+  for (const [key, val] of Object.entries(COURSE_COLORS)) {
+    if (name.toLowerCase().includes(key.toLowerCase())) return val;
+  }
+  return fallbackColor(name);
 }
 
 type ViewMode = "urgency" | "course";
@@ -50,124 +67,210 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
 
   return (
     <>
-      <header className="flex items-center justify-between mb-5">
-        <div>
-          <h1 className="text-lg md:text-base font-semibold tracking-tight">Tasks</h1>
-          {lastSync && (
-            <p className="text-xs text-muted mt-0.5 tabular-nums">
-              Synced {formatDateTime(lastSync.startedAt)} · {lastSync.tasksUpserted} items
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[11px] text-muted mr-2 tabular-nums">{pending.length} pending</span>
-          {(["urgency","course"] as ViewMode[]).map((v) => (
-            <button key={v} onClick={() => setView(v)}
-              className={[
-                "px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors",
-                view === v
-                  ? "bg-foreground border-foreground text-background"
-                  : "bg-surface-1 border-border text-muted hover:text-foreground",
-              ].join(" ")}
-            >
-              {v === "urgency" ? "Priority" : "Subject"}
-            </button>
-          ))}
+      {/* Sticky header */}
+      <header
+        className="sticky top-0 z-30 md:relative md:mb-5"
+        style={{
+          paddingTop: "54px",
+          paddingLeft: "18px",
+          paddingRight: "18px",
+          paddingBottom: "12px",
+          background: "color-mix(in srgb, var(--background) 95%, transparent)",
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
+        }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 style={{ fontSize: "24px", fontWeight: 800, lineHeight: 1.2, color: "var(--foreground)" }}>
+              Tasks
+            </h1>
+            {lastSync && (
+              <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }} className="tabular-nums">
+                Synced {formatDateTime(lastSync.startedAt)} · {lastSync.tasksUpserted} items
+              </p>
+            )}
+          </div>
+
+          {/* Segmented control */}
+          <div
+            className="inline-flex"
+            style={{
+              background: "var(--surface-1)",
+              borderRadius: "12px",
+              padding: "3px",
+            }}
+          >
+            {(["urgency","course"] as ViewMode[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                style={{
+                  padding: "5px 12px",
+                  borderRadius: "9px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  transition: "all 0.15s",
+                  background: view === v ? "var(--foreground)" : "transparent",
+                  color: view === v ? "var(--background)" : "var(--muted)",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                {v === "urgency" ? "Priority" : "Subject"}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
-      {pending.length === 0 && (
-        <div className="text-center py-16 text-muted text-sm">No pending tasks.</div>
-      )}
+      {/* Scrollable content */}
+      <div style={{ padding: "0 16px", paddingBottom: "88px" }} className="md:!p-0">
+        {pending.length === 0 && (
+          <div className="text-center py-16" style={{ color: "var(--muted)", fontSize: "14px" }}>
+            No pending tasks.
+          </div>
+        )}
 
-      {/* Priority view */}
-      {view === "urgency" && (
-        <AnimatePresence mode="popLayout">
-          {urgencyGroups.map(({ urgency, tasks }) => (
-            <motion.section key={urgency} layout className="mb-5">
-              <p className={`text-[11px] font-medium uppercase tracking-widest mb-2 ${URGENCY_SECTION[urgency].color}`}>
-                {URGENCY_SECTION[urgency].label}
-              </p>
-              <ul className="space-y-1.5">
-                <AnimatePresence mode="popLayout">
-                  {tasks.map((t) => (
-                    <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
-                  ))}
-                </AnimatePresence>
-              </ul>
-            </motion.section>
-          ))}
-        </AnimatePresence>
-      )}
-
-      {/* Subject view */}
-      {view === "course" && (
-        <AnimatePresence mode="popLayout">
-          {byCourse.map((group) => {
-            const accent = group.accentColor ?? fallbackColor(group.courseName);
-            return (
-              <motion.section key={group.courseCanvasId} layout className="mb-5">
-                <div className="flex items-center gap-1 mb-2">
-                  <Link
-                    href={`/subjects/${group.courseCanvasId}`}
-                    className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 -mx-2 rounded-lg hover:bg-surface-1 transition-colors group"
-                  >
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: accent }} />
-                    <p className="text-[11px] font-medium uppercase tracking-widest text-muted group-hover:text-foreground transition-colors truncate">
-                      {group.courseName}
-                    </p>
-                    <span className="text-[11px] text-muted/70 ml-auto tabular-nums shrink-0">{group.tasks.length}</span>
-                    <span className="text-[10px] text-muted/70 group-hover:text-foreground transition-colors px-1.5 py-0.5 rounded border border-border group-hover:border-foreground/30 shrink-0">
-                      View
+        {/* Priority view — panels per urgency group */}
+        {view === "urgency" && (
+          <AnimatePresence mode="popLayout">
+            {urgencyGroups.map(({ urgency, tasks }) => {
+              const uc = URGENCY_SECTION[urgency].color;
+              return (
+                <motion.section key={urgency} layout style={{ marginBottom: "22px" }}>
+                  {/* Section label */}
+                  <div className="flex items-center justify-between" style={{ marginBottom: "6px" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
+                      {URGENCY_SECTION[urgency].label}
                     </span>
-                  </Link>
-                  {/* Step 2: trigger AI classification for this course */}
-                  <ClassifyCourseButton
-                    courseId={group.courseCanvasId}
-                    courseName={group.courseName}
-                    variant="inline"
-                  />
-                </div>
-                <ul className="space-y-1.5">
-                  <AnimatePresence mode="popLayout">
-                    {group.tasks.map((t) => (
-                      <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
-                    ))}
-                  </AnimatePresence>
-                </ul>
-              </motion.section>
-            );
-          })}
-        </AnimatePresence>
-      )}
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
+                      {tasks.length}
+                    </span>
+                  </div>
 
-      {/* Completed */}
-      {completed.length > 0 && (
-        <section className="mt-6 border-t border-border pt-4">
-          <button
-            onClick={() => setShowCompleted((v) => !v)}
-            className="flex items-center gap-2 text-[11px] font-medium text-muted uppercase tracking-widest w-full mb-2 hover:text-foreground transition-colors"
-          >
-            <span>{showCompleted ? "▾" : "▸"}</span>
-            Completed ({completed.length})
-          </button>
-          <AnimatePresence>
-            {showCompleted && (
-              <motion.ul
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-1.5 overflow-hidden"
-              >
-                {completed.map((t) => (
-                  <TaskCard key={t.id} task={t} onUncomplete={handleUncomplete} disabled={isPending} />
-                ))}
-              </motion.ul>
-            )}
+                  {/* Panel */}
+                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                    {/* Panel header row */}
+                    <div
+                      className="flex items-center justify-between"
+                      style={{
+                        background: `color-mix(in srgb, ${uc} 14%, transparent)`,
+                        padding: "10px 14px",
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          style={{
+                            width: "7px", height: "7px", borderRadius: "50%",
+                            background: uc, flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ fontSize: "12px", fontWeight: 700, color: uc }}>
+                          {URGENCY_SECTION[urgency].label}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: "12px", fontWeight: 700, color: uc }}>{tasks.length}</span>
+                    </div>
+
+                    <ul>
+                      <AnimatePresence mode="popLayout">
+                        {tasks.map((t) => (
+                          <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
+                        ))}
+                      </AnimatePresence>
+                    </ul>
+                  </div>
+                </motion.section>
+              );
+            })}
           </AnimatePresence>
-        </section>
-      )}
+        )}
+
+        {/* Subject view */}
+        {view === "course" && (
+          <AnimatePresence mode="popLayout">
+            {byCourse.map((group) => {
+              const accent = courseColor(group.courseName, group.accentColor);
+              return (
+                <motion.section key={group.courseCanvasId} layout style={{ marginBottom: "22px" }}>
+                  {/* Floating label */}
+                  <div className="flex items-center gap-2" style={{ marginBottom: "6px" }}>
+                    <span
+                      style={{ width: "8px", height: "8px", borderRadius: "50%", background: accent, flexShrink: 0 }}
+                    />
+                    <Link
+                      href={`/subjects/${group.courseCanvasId}`}
+                      style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)", flex: 1, minWidth: 0 }}
+                      className="truncate hover:opacity-80 transition-opacity"
+                    >
+                      {group.courseName}
+                    </Link>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
+                      {group.tasks.length}
+                    </span>
+                    <ClassifyCourseButton
+                      courseId={group.courseCanvasId}
+                      courseName={group.courseName}
+                      variant="inline"
+                    />
+                  </div>
+
+                  {/* Panel */}
+                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                    <ul>
+                      <AnimatePresence mode="popLayout">
+                        {group.tasks.map((t) => (
+                          <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
+                        ))}
+                      </AnimatePresence>
+                    </ul>
+                  </div>
+                </motion.section>
+              );
+            })}
+          </AnimatePresence>
+        )}
+
+        {/* Completed */}
+        {completed.length > 0 && (
+          <section style={{ marginTop: "24px" }}>
+            <button
+              onClick={() => setShowCompleted((v) => !v)}
+              className="flex items-center gap-2 w-full"
+              style={{
+                fontSize: "12px", fontWeight: 700, color: "var(--muted)",
+                marginBottom: "6px", background: "none", border: "none", cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <span style={{ transition: "transform 0.15s", display: "inline-block", transform: showCompleted ? "rotate(90deg)" : "none" }}>
+                ▸
+              </span>
+              Completed ({completed.length})
+            </button>
+            <AnimatePresence>
+              {showCompleted && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.18 }}
+                  style={{ overflow: "hidden" }}
+                >
+                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden", opacity: 0.55 }}>
+                    <ul>
+                      {completed.map((t) => (
+                        <TaskCard key={t.id} task={t} onUncomplete={handleUncomplete} disabled={isPending} />
+                      ))}
+                    </ul>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </section>
+        )}
+      </div>
     </>
   );
 }

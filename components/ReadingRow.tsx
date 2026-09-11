@@ -1,14 +1,5 @@
 "use client";
 
-/**
- * 📖 ReadingRow — a single reading entry (chapter / article).
- *
- * Used by `ReadingsDashboard` and `SubjectAccordion`. Calls the
- * server actions directly when the checkbox is toggled.
- *
- * If `onEdit` is passed, an edit button is rendered so the user can
- * open the reading in the side-sheet (Step 3 — manual readings).
- */
 import { motion } from "framer-motion";
 import { completeReading, uncompleteReading } from "@/app/actions/readings";
 import type { ReadingItem } from "@/drizzle/schema";
@@ -36,37 +27,62 @@ export function ReadingRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -16 }}
       transition={{ duration: 0.15 }}
-      className="flex items-start gap-3 rounded-xl bg-surface-1 border border-border px-3 py-2.5"
+      className="flex items-start gap-3"
+      style={{ padding: "13px 14px", borderBottom: "1px solid var(--border)" }}
     >
+      {/* 22×22 circle checkbox, accent-filled when done */}
       <button
         onClick={handleToggle}
-        className={[
-          "mt-0.5 shrink-0 w-5 h-5 rounded-full border border-border transition-all flex items-center justify-center",
-          done ? "bg-foreground border-foreground" : "hover:border-[#6366f1]",
-        ].join(" ")}
+        style={{
+          marginTop: "1px",
+          flexShrink: 0,
+          width: "22px",
+          height: "22px",
+          borderRadius: "50%",
+          border: `2px solid ${done ? "var(--accent)" : "var(--border)"}`,
+          background: done ? "var(--accent)" : "transparent",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          transition: "all 0.15s",
+        }}
         aria-label={done ? "Mark unread" : "Mark read"}
       >
-        {done && <span className="text-[10px] text-background leading-none">✓</span>}
+        {done && (
+          <span style={{ color: "var(--accent-fg)", fontSize: "10px", fontWeight: 700, lineHeight: 1 }}>✓</span>
+        )}
       </button>
 
       <div className="flex-1 min-w-0">
-        <p className={["text-sm leading-snug", done ? "line-through text-muted" : "text-foreground"].join(" ")}>
+        <p
+          style={{
+            fontSize: "13px",
+            fontWeight: 600,
+            lineHeight: 1.4,
+            color: done ? "var(--muted)" : "var(--foreground)",
+            textDecoration: done ? "line-through" : "none",
+          }}
+        >
           {item.readingText}
         </p>
         {item.detail && (
-          <p className="text-[11px] text-muted mt-0.5">{item.detail}</p>
+          <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>{item.detail}</p>
         )}
       </div>
 
-      <div className="shrink-0 flex items-center gap-1.5 mt-0.5">
+      <div className="shrink-0 flex items-center gap-1.5" style={{ marginTop: "2px" }}>
         {item.sourcePageUrl && (
           <a href={item.sourcePageUrl} target="_blank" rel="noopener noreferrer"
-             className="text-muted hover:text-foreground transition-colors text-xs">↗</a>
+             style={{ color: "var(--muted)", fontSize: "12px" }}
+             className="hover:opacity-80 transition-opacity"
+          >↗</a>
         )}
         {onEdit && (
           <button
             onClick={() => onEdit(item)}
-            className="text-muted hover:text-foreground transition-colors text-xs"
+            style={{ color: "var(--muted)", fontSize: "12px", cursor: "pointer", background: "none", border: "none" }}
+            className="hover:opacity-80 transition-opacity"
             aria-label="Edit reading"
             title="Edit"
           >
