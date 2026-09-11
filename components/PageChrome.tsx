@@ -5,14 +5,6 @@ import { BottomTabs } from "./BottomTabs";
 
 export type PageId = "tasks" | "resources" | "readings" | "timetable" | "settings";
 
-const NAV: { id: PageId; label: string; href: string }[] = [
-  { id: "tasks",     label: "Tasks",     href: "/" },
-  { id: "readings",  label: "Readings",  href: "/readings" },
-  { id: "timetable", label: "Schedule",  href: "/timetable" },
-  { id: "resources", label: "Resources", href: "/resources" },
-  { id: "settings",  label: "Settings",  href: "/settings" },
-];
-
 export function PageChrome({
   active,
   course,
@@ -24,38 +16,14 @@ export function PageChrome({
 }) {
   return (
     <div className="min-h-screen bg-background text-foreground flex">
-      {/* Desktop sidebar */}
+      {/* Desktop sidebar — hidden on mobile */}
       <Sidebar active={active} course={course} />
 
       {/* Main column */}
       <main className="flex-1 min-w-0">
-        <div className="max-w-2xl mx-auto px-4 pt-4 pb-28 md:pt-6 md:pb-8">
+        <div className="max-w-2xl mx-auto px-4 pt-5 pb-28 md:pt-6 md:pb-8">
 
-          {/* Mobile header */}
-          <header className="md:hidden flex items-center justify-between mb-5">
-            <div className="flex items-center gap-1 bg-surface-1 border border-border rounded-xl p-1">
-              {NAV.filter(n => n.id !== "settings").map((n) => {
-                const isActive = n.id === active;
-                return (
-                  <Link
-                    key={n.id}
-                    href={n.href}
-                    className={[
-                      "px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all",
-                      isActive
-                        ? "bg-foreground text-background shadow-sm"
-                        : "text-muted hover:text-foreground",
-                    ].join(" ")}
-                  >
-                    {n.label}
-                  </Link>
-                );
-              })}
-            </div>
-            <ThemeToggle />
-          </header>
-
-          {/* Mobile subject breadcrumb */}
+          {/* Mobile subject breadcrumb — only shown on subject pages */}
           {course && (
             <div className="md:hidden mb-4 flex items-center gap-2">
               <Link href="/" className="text-[11px] text-muted hover:text-foreground transition-colors">
@@ -75,7 +43,7 @@ export function PageChrome({
         </div>
       </main>
 
-      {/* Mobile bottom tabs */}
+      {/* Mobile bottom tabs — full navigation lives here */}
       <BottomTabs active={active} />
     </div>
   );
