@@ -522,12 +522,12 @@ async function runAIForPages(
           sourcePageUrl:  page.html_url ?? null,
           weekNumber:     r.weekNumber,
           lectureSlot:    r.lectureSlot,
-          confidence:    r.confidence,
+          deadlineConfidence: r.confidence,
           source:         "ai",
           createdAt:      now,
           updatedAt:      now,
         }).onConflictDoUpdate({
-          // Re-extract on a re-run: overwrite week/lecture-slot/detail/confidence so
+          // Re-extract on a re-run: overwrite week/lecture-slot/detail/deadlineConfidence so
           // the latest AI verdict wins. Leave completedAt, source, and
           // sourcePageUrl alone — those are user/Canvas state.
           target: [
@@ -540,7 +540,7 @@ async function runAIForPages(
             weekNumber:   r.weekNumber,
             lectureSlot:  r.lectureSlot,
             detail:       r.detail ?? null,
-            confidence:  r.confidence,
+            deadlineConfidence: r.confidence,
             updatedAt:    now,
           },
         });
