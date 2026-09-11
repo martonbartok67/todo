@@ -1,7 +1,11 @@
 import { db } from "@/lib/db";
 import { tasks, courses, syncLog } from "@/drizzle/schema";
-import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne } from "drizzle-orm";
+import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne } , notInArray } from "drizzle-orm";
 import type { Task } from "@/drizzle/schema";
+
+
+// Courses excluded from all views — not real coursework
+const SKIP_COURSES = ["43161", "56744", "56741", "42446"];
 
 export type UrgencyLevel = "critical" | "high" | "medium" | "low" | "none";
 
@@ -156,7 +160,7 @@ export async function getCompletedTasks(): Promise<EnrichedTask[]> {
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
     .from(tasks)
     .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
-    .where(isNotNull(tasks.completedAt))
+    .where(and(isNotNull(tasks.completedAt), notInArray(tasks.courseCanvasId, SKIP_COURSES)))
     .orderBy(desc(tasks.completedAt))
     .limit(50);
   return rows.map(({ task, courseName, accentColor }) => ({
