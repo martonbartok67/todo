@@ -2,83 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
-/*
- * 🎨 THE PAINT BOX
- *
- * Tailwind says "I want to know what color `var(--background)` is!"
- * and THIS file answers.
- *
- * We define four "magic crayons" — they each have TWO names:
- *   one for day mode (`.light` is the class on <html>)
- *   one for night mode (`.dark` is the class on <html>)
- *
- * `next-themes` flips the class on <html>, and the CSS automatically
- * swaps which crayon is being used. Ta-da! ☀️🌙
- *
- * The numbers after the colors (e.g. `0 0% 100%`) are HSL values —
- * Hue, Saturation, Lightness — which is just a fancy way of describing
- * a color. Don't worry about memorizing them.
- */
 @layer base {
   :root {
-    /* ☀️ Day mode — bright paper, dark ink */
-    --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
-    --border:     240 6% 90%;
-    --muted:      240 4% 46%;
+    --background:      0 0% 99%;
+    --foreground:      240 12% 8%;
+    --border:          240 6% 88%;
+    --muted:           240 5% 52%;
 
-    /* Surface tints — barely-visible card backgrounds. In light mode they're
-     * almost-white; in dark mode they're slightly-lighter-than-the-page. This
-     * keeps the same visual rhythm ("the card is one shade off the page") in
-     * both themes. */
-    --surface-1: 240 5% 96%;   /* near-white card on white page */
-    --surface-2: 240 5% 92%;   /* slightly darker chip / nested card */
-    --surface-3: 240 5% 88%;   /* hover / pressed state */
-    --surface-default: 240 10% 4%; /* the page-edge tone (used by bg-surface) */
+    --surface-1:       240 6% 95%;
+    --surface-2:       240 6% 90%;
+    --surface-3:       240 6% 85%;
+    --surface-default: 240 12% 8%;
+
+    --accent:          245 70% 60%;   /* indigo */
+    --accent-fg:       0 0% 100%;
   }
 
   .dark {
-    /* 🌙 Night mode — dark paper, light ink */
-    --background: 240 10% 4%;
-    --foreground: 0 0% 98%;
-    --border:     240 4% 16%;
-    --muted:      240 5% 65%;
+    --background:      240 12% 6%;
+    --foreground:      0 0% 93%;
+    --border:          240 6% 14%;
+    --muted:           240 5% 52%;
 
-    --surface-1: 240 4% 9%;    /* near-black card, slightly lifted */
-    --surface-2: 240 4% 13%;
-    --surface-3: 240 4% 17%;
-    --surface-default: 240 10% 4%;
+    --surface-1:       240 8% 10%;
+    --surface-2:       240 7% 14%;
+    --surface-3:       240 7% 18%;
+    --surface-default: 240 12% 6%;
+
+    --accent:          245 70% 62%;
+    --accent-fg:       0 0% 100%;
   }
 }
 
-/* Every box gets its size right, just like normal CSS. */
-* {
-  box-sizing: border-box;
+* { box-sizing: border-box; }
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/*
- * 🌙→☀️ Smooth theme transitions.
- * When the user clicks the toggle, the `--background`/`--foreground`
- * variables flip, and every element using them cross-fades over 200ms.
- * `transition-property: background-color, color, border-color` targets
- * exactly the tokens that change with theme, not everything (avoids
- * animating transforms / opacity on every hover).
- */
-html {
-  transition: background-color 200ms ease, color 200ms ease;
-}
 html, body {
-  transition-property: background-color, color, border-color;
-  transition-duration: 200ms;
+  transition-property: background-color, border-color;
+  transition-duration: 150ms;
   transition-timing-function: ease;
 }
 
-/*
- * 🖼️ The whole page uses our magic crayons now.
- * `bg-background` = "use the --background crayon for the background".
- * `text-foreground` = "use the --foreground crayon for text".
- * When the user toggles dark mode, both crayons flip automatically.
- */
 body {
-  @apply bg-background text-foreground antialiased;
+  @apply bg-background text-foreground;
+  font-feature-settings: "kern" 1, "liga" 1;
 }
+
+/* Scrollbar — minimal, theme-aware */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
