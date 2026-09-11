@@ -17,6 +17,12 @@ export type ExtractedReading = {
   detail:        string | null;
   weekNumber:    number | null;
   lectureSlot:   LectureSlot;
+  // Confidence score (0-1) for how well the AI determined
+  // the week number and lecture slot. NULL when the source page
+  // doesn't mention a specific week/lecture.
+  confidence:    number | null;
+  // Source identifier: "ai" for AI-extracted rows, "manual" for user-added
+  source:        string;
   // Alias fields — the AI sometimes uses different key names;
   // the parser normalises all of these into the core fields above.
   week?:         number | null;
@@ -28,7 +34,6 @@ export type ExtractedReading = {
   preparation?:  string | null;
   reading?:      string | null;
   title?:        string | null;
-  source?:       string | null;
 };
 
 // Broad keyword set — matches schedules, module overviews, and course manuals
@@ -248,6 +253,8 @@ async function callGroqWithRetry(
           detail:       r.detail ? String(r.detail) : null,
           weekNumber:   week,
           lectureSlot:  lectureSlot,
+          confidence:   r.confidence != null ? Math.max(0, Math.min(1, Number(r.confidence))) : null,
+          source:       "ai",
         };
       }).filter((r) => r.lectureLabel && r.readingText);
     } catch (err) {

@@ -163,11 +163,23 @@ export const readingItems = sqliteTable("reading_items", {
   // Concrete date the lecture happens. NULL until Step 4's deadline
   // alignment fills it in by matching against timetable_events.
   lectureDate: text("lecture_date"),
+  // ── Step 4: Deadline alignment ────────────────────────────────────
+  // Foreign key to timetable_events — links this reading to the specific
+  // lecture session it belongs to. NULL until the alignment pipeline runs.
+  linkedTimetableEventId: integer("linked_timetable_event_id"),
+  // Confidence score (0-1) for the deadline assignment. NULL when unassigned.
+  deadlineConfidence:      real("deadline_confidence"),
 }, (t) => ({
   courseIdx: index("reading_items_course_idx").on(t.courseCanvasId),
   weekIdx:   index("reading_items_week_idx").on(
     t.courseCanvasId, t.weekNumber, t.lectureSlot
   ),
+  // Composite index for fast retrieval by course and lecture label
+  courseLectureIdx: index("reading_items_course_lecture_idx").on(
+    t.courseCanvasId, t.lectureLabel
+  ),
+  // Index for linked timetable events
+  linkedEventIdx: index("reading_items_linked_event_idx").on(t.linkedTimetableEventId),
   // Note: the unique index now includes `source` so a manual row can
   // coexist with an AI row that happens to have the same text. The
   // `lecture_slot` column default ("unknown") ensures older rows

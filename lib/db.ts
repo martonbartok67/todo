@@ -68,8 +68,10 @@ const TABLE_DDL: Record<string, string[]> = {
     `INSERT OR IGNORE INTO user_settings (id, ical_url, ical_label) VALUES (1, NULL, NULL)`,
   ],
   reading_items: [
-    `CREATE TABLE IF NOT EXISTS reading_items (id INTEGER PRIMARY KEY AUTOINCREMENT, course_canvas_id TEXT NOT NULL, course_name TEXT NOT NULL, lecture_label TEXT NOT NULL, reading_text TEXT NOT NULL, detail TEXT, completed_at TEXT, source_page_url TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), week_number INTEGER, lecture_slot TEXT NOT NULL DEFAULT 'unknown', source TEXT NOT NULL DEFAULT 'ai', lecture_date TEXT)`,
+    `CREATE TABLE IF NOT EXISTS reading_items (id INTEGER PRIMARY KEY AUTOINCREMENT, course_canvas_id TEXT NOT NULL, course_name TEXT NOT NULL, lecture_label TEXT NOT NULL, reading_text TEXT NOT NULL, detail TEXT, completed_at TEXT, source_page_url TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), week_number INTEGER, lecture_slot TEXT NOT NULL DEFAULT 'unknown', source TEXT NOT NULL DEFAULT 'ai', lecture_date TEXT, linked_timetable_event_id INTEGER, deadline_confidence REAL)`,
     `CREATE INDEX IF NOT EXISTS reading_items_course_idx ON reading_items (course_canvas_id)`,
+    `CREATE INDEX IF NOT EXISTS reading_items_course_lecture_idx ON reading_items (course_canvas_id, lecture_label)`,
+    `CREATE INDEX IF NOT EXISTS reading_items_linked_event_idx ON reading_items (linked_timetable_event_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS reading_items_unique_idx ON reading_items (course_canvas_id, lecture_label, reading_text, source)`,
   ],
 };
@@ -81,13 +83,16 @@ const COLUMN_MIGRATIONS: Record<string, Array<{ column: string; ddl: string }>> 
     { column: "classified_at",         ddl: "ALTER TABLE tasks ADD COLUMN classified_at TEXT" },
   ],
   timetable_events: [
-    { column: "source", ddl: "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'" },
+    { column: "source",       ddl: "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'" },
+    { column: "source_url",   ddl: "ALTER TABLE timetable_events ADD COLUMN source_url TEXT" },
   ],
   reading_items: [
     { column: "week_number",  ddl: "ALTER TABLE reading_items ADD COLUMN week_number INTEGER" },
     { column: "lecture_slot", ddl: "ALTER TABLE reading_items ADD COLUMN lecture_slot TEXT NOT NULL DEFAULT 'unknown'" },
     { column: "source",       ddl: "ALTER TABLE reading_items ADD COLUMN source TEXT NOT NULL DEFAULT 'ai'" },
     { column: "lecture_date", ddl: "ALTER TABLE reading_items ADD COLUMN lecture_date TEXT" },
+    { column: "linked_timetable_event_id", ddl: "ALTER TABLE reading_items ADD COLUMN linked_timetable_event_id INTEGER" },
+    { column: "deadline_confidence", ddl: "ALTER TABLE reading_items ADD COLUMN deadline_confidence REAL" },
   ],
 };
 
