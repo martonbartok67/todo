@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { tasks, courses, syncLog } from "@/drizzle/schema";
-import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne } , notInArray } from "drizzle-orm";
+import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne, notInArray } from "drizzle-orm";
 import type { Task } from "@/drizzle/schema";
 
 
