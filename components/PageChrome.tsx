@@ -53,10 +53,12 @@ export function PageChrome({
 
           {/* Content — bottom padding clears the tab bar + home indicator */}
           <div
-            className="px-4 md:px-0 md:pt-0 md:pb-0"
+            className="md:px-0 md:pt-0 md:pb-0"
             style={{
-              paddingTop: course ? "8px" : "0",
+              paddingTop:    course ? "8px" : "0",
               paddingBottom: "calc(72px + env(safe-area-inset-bottom))",
+              paddingLeft:   "max(16px, env(safe-area-inset-left))",
+              paddingRight:  "max(16px, env(safe-area-inset-right))",
             }}
           >
             {children}

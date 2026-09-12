@@ -23,7 +23,13 @@ export function BottomTabs({ active }: { active: string }) {
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
-      <ul className="flex max-w-2xl mx-auto px-1">
+      <ul
+        className="flex max-w-2xl mx-auto"
+        style={{
+          paddingLeft:  "max(4px, env(safe-area-inset-left))",
+          paddingRight: "max(4px, env(safe-area-inset-right))",
+        }}
+      >
         {TABS.map((t) => {
           const isActive = t.id === active;
           return (
