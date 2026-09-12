@@ -56,6 +56,15 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
   const [isPending, startTransition] = useTransition();
   const [view, setView]              = useState<ViewMode>("urgency");
   const [showCompleted, setShowCompleted] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  function toggleGroup(key: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
 
   function handleComplete(id: number)   { startTransition(() => { completeTask(id); }); }
   function handleUncomplete(id: number) { startTransition(() => { uncompleteTask(id); }); }
@@ -151,15 +160,26 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
 
                   {/* Panel */}
                   <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
-                    {/* Panel header row */}
-                    <div
-                      className="flex items-center justify-between"
+                    {/* Panel header row — click to collapse */}
+                    <button
+                      onClick={() => toggleGroup(`u:${urgency}`)}
+                      className="flex items-center justify-between w-full"
                       style={{
                         background: `color-mix(in srgb, ${uc} 14%, transparent)`,
                         padding: "10px 14px",
+                        border: "none",
+                        cursor: "pointer",
                       }}
                     >
                       <div className="flex items-center gap-2">
+                        <span
+                          style={{
+                            transition: "transform 0.15s",
+                            display: "inline-block",
+                            transform: collapsed.has(`u:${urgency}`) ? "rotate(-90deg)" : "none",
+                            fontSize: "10px", color: uc,
+                          }}
+                        >▾</span>
                         <span
                           style={{
                             width: "7px", height: "7px", borderRadius: "50%",
@@ -171,15 +191,27 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
                         </span>
                       </div>
                       <span style={{ fontSize: "12px", fontWeight: 700, color: uc }}>{tasks.length}</span>
-                    </div>
+                    </button>
 
-                    <ul>
-                      <AnimatePresence mode="popLayout">
-                        {tasks.map((t) => (
-                          <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
-                        ))}
-                      </AnimatePresence>
-                    </ul>
+                    <AnimatePresence initial={false}>
+                      {!collapsed.has(`u:${urgency}`) && (
+                        <motion.div
+                          initial={{ height: 0 }}
+                          animate={{ height: "auto" }}
+                          exit={{ height: 0 }}
+                          transition={{ duration: 0.18 }}
+                          style={{ overflow: "hidden" }}
+                        >
+                          <ul>
+                            <AnimatePresence mode="popLayout">
+                              {tasks.map((t) => (
+                                <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
+                              ))}
+                            </AnimatePresence>
+                          </ul>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </motion.section>
               );
@@ -194,8 +226,18 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
               const accent = courseColor(group.courseName, group.accentColor);
               return (
                 <motion.section key={group.courseCanvasId} layout style={{ marginBottom: "22px" }}>
-                  {/* Floating label */}
+                  {/* Floating label — click to collapse */}
                   <div className="flex items-center gap-2" style={{ marginBottom: "6px" }}>
+                    <button
+                      onClick={() => toggleGroup(`c:${group.courseCanvasId}`)}
+                      style={{
+                        transition: "transform 0.15s",
+                        display: "inline-block",
+                        transform: collapsed.has(`c:${group.courseCanvasId}`) ? "rotate(-90deg)" : "none",
+                        fontSize: "10px", color: "var(--muted)",
+                        background: "none", border: "none", cursor: "pointer", padding: 0,
+                      }}
+                    >▾</button>
                     <span
                       style={{ width: "8px", height: "8px", borderRadius: "50%", background: accent, flexShrink: 0 }}
                     />
@@ -217,15 +259,27 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
                   </div>
 
                   {/* Panel */}
-                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
-                    <ul>
-                      <AnimatePresence mode="popLayout">
-                        {group.tasks.map((t) => (
-                          <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
-                        ))}
-                      </AnimatePresence>
-                    </ul>
-                  </div>
+                  <AnimatePresence initial={false}>
+                    {!collapsed.has(`c:${group.courseCanvasId}`) && (
+                      <motion.div
+                        initial={{ height: 0 }}
+                        animate={{ height: "auto" }}
+                        exit={{ height: 0 }}
+                        transition={{ duration: 0.18 }}
+                        style={{ overflow: "hidden" }}
+                      >
+                        <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                          <ul>
+                            <AnimatePresence mode="popLayout">
+                              {group.tasks.map((t) => (
+                                <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
+                              ))}
+                            </AnimatePresence>
+                          </ul>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </motion.section>
               );
             })}

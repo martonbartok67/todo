@@ -67,6 +67,15 @@ export default function ReadingsDashboard({
     mode: "add" | "edit";
     reading: SheetReading | null;
   } | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  function toggleGroup(key: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
 
   function handleComplete(id: number)   { startTransition(() => { completeReading(id); }); }
   function handleUncomplete(id: number) { startTransition(() => { uncompleteReading(id); }); }
@@ -163,8 +172,20 @@ export default function ReadingsDashboard({
 
           return (
             <section key={course.courseCanvasId} style={{ marginBottom: "22px" }}>
-              {/* Course header */}
-              <div className="flex items-center gap-2" style={{ marginBottom: "8px" }}>
+              {/* Course header — click to collapse whole course */}
+              <button
+                onClick={() => toggleGroup(`c:${course.courseCanvasId}`)}
+                className="flex items-center gap-2 w-full"
+                style={{ marginBottom: "8px", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+              >
+                <span
+                  style={{
+                    transition: "transform 0.15s",
+                    display: "inline-block",
+                    transform: collapsed.has(`c:${course.courseCanvasId}`) ? "rotate(-90deg)" : "none",
+                    fontSize: "10px", color: "var(--muted)",
+                  }}
+                >▾</span>
                 <span
                   style={{ width: "8px", height: "8px", borderRadius: "50%", background: accent, flexShrink: 0 }}
                 />
@@ -177,41 +198,79 @@ export default function ReadingsDashboard({
                 <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }} className="tabular-nums">
                   {courseDone}/{courseTotal}
                 </span>
-              </div>
+              </button>
 
-              {course.lectures.map((lecture) => (
-                <div key={lecture.label} style={{ marginBottom: "14px" }}>
-                  {/* Lecture sublabel in accent color */}
-                  <p
-                    style={{
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      color: "var(--accent)",
-                      marginBottom: "6px",
-                      marginLeft: "2px",
-                    }}
+              <AnimatePresence initial={false}>
+                {!collapsed.has(`c:${course.courseCanvasId}`) && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: "auto" }}
+                    exit={{ height: 0 }}
+                    transition={{ duration: 0.18 }}
+                    style={{ overflow: "hidden" }}
                   >
-                    {lecture.label}
-                  </p>
+                    {course.lectures.map((lecture) => {
+                      const lectureKey = `l:${course.courseCanvasId}:${lecture.label}`;
+                      return (
+                        <div key={lecture.label} style={{ marginBottom: "14px" }}>
+                          {/* Lecture sublabel — click to collapse just this lecture */}
+                          <button
+                            onClick={() => toggleGroup(lectureKey)}
+                            className="flex items-center gap-1.5 w-full"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer", padding: 0,
+                              marginBottom: "6px", marginLeft: "2px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                transition: "transform 0.15s",
+                                display: "inline-block",
+                                transform: collapsed.has(lectureKey) ? "rotate(-90deg)" : "none",
+                                fontSize: "9px", color: "var(--accent)",
+                              }}
+                            >▾</span>
+                            <p style={{ fontSize: "11px", fontWeight: 700, color: "var(--accent)" }}>
+                              {lecture.label}
+                            </p>
+                            <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", marginLeft: "auto" }}>
+                              {lecture.items.length}
+                            </span>
+                          </button>
 
-                  {/* Panel */}
-                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
-                    <ul>
-                      <AnimatePresence mode="popLayout">
-                        {lecture.items.map((item) => (
-                          <ReadingRow
-                            key={item.id}
-                            item={item}
-                            onComplete={handleComplete}
-                            onUncomplete={handleUncomplete}
-                            onEdit={(it) => setSheet({ mode: "edit", reading: it })}
-                          />
-                        ))}
-                      </AnimatePresence>
-                    </ul>
-                  </div>
-                </div>
-              ))}
+                          <AnimatePresence initial={false}>
+                            {!collapsed.has(lectureKey) && (
+                              <motion.div
+                                initial={{ height: 0 }}
+                                animate={{ height: "auto" }}
+                                exit={{ height: 0 }}
+                                transition={{ duration: 0.16 }}
+                                style={{ overflow: "hidden" }}
+                              >
+                                <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                                  <ul>
+                                    <AnimatePresence mode="popLayout">
+                                      {lecture.items.map((item) => (
+                                        <ReadingRow
+                                          key={item.id}
+                                          item={item}
+                                          onComplete={handleComplete}
+                                          onUncomplete={handleUncomplete}
+                                          onEdit={(it) => setSheet({ mode: "edit", reading: it })}
+                                        />
+                                      ))}
+                                    </AnimatePresence>
+                                  </ul>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </section>
           );
         })}
