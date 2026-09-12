@@ -74,6 +74,7 @@ export function TaskCard({
         <button
           disabled={disabled || isPending}
           onClick={handleToggle}
+          className="tap-target"
           style={{
             marginTop: "1px",
             flexShrink: 0,
@@ -118,9 +119,12 @@ export function TaskCard({
               {task.title}
             </p>
             {hasContent && (
-              <span style={{ flexShrink: 0, color: "var(--muted)", fontSize: "9px", marginTop: "2px" }}>
-                {expanded ? "▴" : "▾"}
-              </span>
+              <span style={{
+                flexShrink: 0, color: "var(--muted)", fontSize: "11px",
+                marginTop: "1px", transition: "transform 0.15s",
+                transform: expanded ? "rotate(180deg)" : "none",
+                display: "inline-block",
+              }}>▾</span>
             )}
           </div>
 
@@ -162,8 +166,12 @@ export function TaskCard({
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            style={{ flexShrink: 0, color: "var(--muted)", fontSize: "14px", marginTop: "2px" }}
-            className="hover:opacity-80 transition-opacity"
+            className="tap-target hover:opacity-80 transition-opacity"
+            style={{
+              flexShrink: 0, color: "var(--muted)", fontSize: "16px",
+              marginTop: "0px", padding: "2px 4px", lineHeight: 1,
+            }}
+            aria-label="Open in Canvas"
           >↗</a>
         )}
       </div>

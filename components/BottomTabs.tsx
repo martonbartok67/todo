@@ -20,10 +20,10 @@ export function BottomTabs({ active }: { active: string }) {
       style={{
         background: "color-mix(in srgb, var(--background) 97%, transparent)",
         borderTop: "1px solid var(--border)",
-        paddingBottom: "calc(8px + env(safe-area-inset-bottom))",
+        paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
-      <ul className="flex max-w-2xl mx-auto px-1 pt-2">
+      <ul className="flex max-w-2xl mx-auto px-1">
         {TABS.map((t) => {
           const isActive = t.id === active;
           return (
@@ -32,7 +32,12 @@ export function BottomTabs({ active }: { active: string }) {
                 href={t.href}
                 aria-current={isActive ? "page" : undefined}
                 className="flex flex-col items-center justify-center gap-[3px] w-full"
-                style={{ color: isActive ? "var(--accent)" : "var(--muted)" }}
+                style={{
+                  color: isActive ? "var(--accent)" : "var(--muted)",
+                  minHeight: "52px",
+                  paddingTop: "8px",
+                  paddingBottom: "8px",
+                }}
               >
                 <span className="w-[22px] h-[22px]">{t.icon}</span>
                 <span style={{ fontSize: "10px", fontWeight: 700, lineHeight: 1 }}>{t.label}</span>

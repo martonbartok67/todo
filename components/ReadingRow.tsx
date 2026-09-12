@@ -33,6 +33,7 @@ export function ReadingRow({
       {/* 22×22 circle checkbox, accent-filled when done */}
       <button
         onClick={handleToggle}
+        className="tap-target"
         style={{
           marginTop: "1px",
           flexShrink: 0,
@@ -71,23 +72,24 @@ export function ReadingRow({
         )}
       </div>
 
-      <div className="shrink-0 flex items-center gap-1.5" style={{ marginTop: "2px" }}>
+      <div className="shrink-0 flex items-center gap-3" style={{ marginTop: "0px" }}>
         {item.sourcePageUrl && (
           <a href={item.sourcePageUrl} target="_blank" rel="noopener noreferrer"
-             style={{ color: "var(--muted)", fontSize: "12px" }}
-             className="hover:opacity-80 transition-opacity"
+             className="tap-target hover:opacity-80 transition-opacity"
+             style={{ color: "var(--muted)", fontSize: "15px", padding: "2px 3px", lineHeight: 1 }}
+             aria-label="Open source page"
           >↗</a>
         )}
         {onEdit && (
           <button
             onClick={() => onEdit(item)}
-            style={{ color: "var(--muted)", fontSize: "12px", cursor: "pointer", background: "none", border: "none" }}
-            className="hover:opacity-80 transition-opacity"
+            className="tap-target hover:opacity-80 transition-opacity"
+            style={{
+              color: "var(--muted)", fontSize: "15px", cursor: "pointer",
+              background: "none", border: "none", padding: "2px 3px", lineHeight: 1,
+            }}
             aria-label="Edit reading"
-            title="Edit"
-          >
-            ✎
-          </button>
+          >✎</button>
         )}
       </div>
     </motion.li>

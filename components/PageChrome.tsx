@@ -15,7 +15,10 @@ export function PageChrome({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex" style={{ background: "var(--background)", color: "var(--foreground)" }}>
+    <div
+      className="min-h-screen flex"
+      style={{ background: "var(--background)", color: "var(--foreground)" }}
+    >
       {/* Desktop sidebar — hidden on mobile */}
       <Sidebar active={active} course={course} />
 
@@ -23,14 +26,23 @@ export function PageChrome({
       <main className="flex-1 min-w-0">
         <div className="max-w-2xl mx-auto md:px-4 md:pt-6 md:pb-8">
 
-          {/* Mobile subject breadcrumb — only shown on subject pages */}
+          {/* Mobile subject breadcrumb — safe-area aware */}
           {course && (
-            <div className="md:hidden px-4 pt-16 pb-2 flex items-center gap-2">
-              <Link href="/" className="text-[11px]" style={{ color: "var(--muted)" }}>
+            <div
+              className="md:hidden px-4 pb-2 flex items-center gap-2"
+              style={{ paddingTop: "calc(env(safe-area-inset-top) + 16px)" }}
+            >
+              <Link
+                href="/"
+                className="tap-target"
+                style={{ fontSize: "12px", color: "var(--muted)", padding: "4px 0" }}
+              >
                 ← Tasks
               </Link>
-              <span className="text-[11px]" style={{ color: "var(--muted)" }}>/</span>
-              <span className="text-[11px] font-medium truncate">{course.name}</span>
+              <span style={{ fontSize: "12px", color: "var(--muted)" }}>/</span>
+              <span style={{ fontSize: "12px", fontWeight: 600 }} className="truncate">
+                {course.name}
+              </span>
             </div>
           )}
 
@@ -39,13 +51,19 @@ export function PageChrome({
             <ThemeToggle />
           </div>
 
-          <div className="px-4 pt-4 pb-[88px] md:px-0 md:pt-0 md:pb-0">
+          {/* Content — bottom padding clears the tab bar + home indicator */}
+          <div
+            className="px-4 md:px-0 md:pt-0 md:pb-0"
+            style={{
+              paddingTop: course ? "8px" : "0",
+              paddingBottom: "calc(72px + env(safe-area-inset-bottom))",
+            }}
+          >
             {children}
           </div>
         </div>
       </main>
 
-      {/* Mobile bottom tabs — full navigation lives here */}
       <BottomTabs active={active} />
     </div>
   );

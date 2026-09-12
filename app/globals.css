@@ -72,3 +72,69 @@ body {
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
+
+/* ── Mobile UX foundations ───────────────────────────────────────────── */
+
+/* Kill the grey tap flash on iOS/Android */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent accidental text selection on interactive chrome */
+button, a, [role="button"], nav, header {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* But allow selection in actual content */
+p, span.selectable, .task-title, .reading-text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* iOS: stop rubber-band overscroll showing the wrong background */
+html {
+  overscroll-behavior-y: none;
+  background-color: var(--background);
+}
+body {
+  overscroll-behavior-y: contain;
+}
+
+/* iOS: inputs below 16px trigger auto-zoom on focus. Never go below. */
+input, select, textarea {
+  font-size: 16px;
+}
+
+/* Tap feedback — subtle press state on every interactive element */
+button:active, a:active, [role="button"]:active {
+  opacity: 0.6;
+  transition: opacity 0.05s;
+}
+
+/* Touch-target helper: expands the hit area without changing layout size.
+   Apply to small icon buttons/links (↗, ✎, chevrons). */
+.tap-target {
+  position: relative;
+}
+.tap-target::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+}
+
+/* Momentum scrolling on iOS */
+.scroll-y {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
