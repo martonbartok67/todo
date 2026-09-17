@@ -1,236 +1,256 @@
 "use server";
 /**
- * Timetable server actions.
- * attachTimetableDeadlines() — matches undated tasks to their lecture date
- * using ISO week number extracted from task title / module label.
+ * ⏰ Timetable server actions.
  *
- * Matching strategy (in priority order):
- *   1. reading_items with weekNumber → direct ISO week lookup in timetable_events
- *   2. tasks without due_at          → match course + ISO week from task title
- *   3. session-based courses (Marketing) → match by session order
+ * `attachTimetableDeadlines()` gives every undated piece of coursework a
+ * deadline derived from the lecture or workshop it belongs to.
+ *
+ * How the link is made — the part that used to be broken:
+ *
+ *   task title ──"Module 3"/"wk38"/"Unit 3.1"──▶ week reference
+ *        │
+ *        ▼
+ *   the course's own calendar, grouped into teaching weeks
+ *        │
+ *        ▼
+ *   the lecture (or workshop) in that week ──▶ due 1h before it starts
+ *
+ * The week→date table is no longer hand-transcribed per course: the
+ * calendar *is* the table. See lib/schedule.ts for the reasoning.
+ *
+ * Before any of that runs we repair the calendar itself — iCal events whose
+ * course could not be identified at ingest are re-matched here, because an
+ * event with a NULL course_canvas_id can never be found by a course-scoped
+ * lookup, which is why every task previously came back "couldn't find a
+ * matching event".
  */
 import { db } from "@/lib/db";
-import { tasks, timetableEvents, userSettings, readingItems } from "@/drizzle/schema";
-import { eq, isNull, and, gte, lte, like, not, asc } from "drizzle-orm";
+import {
+  tasks, timetableEvents, userSettings, readingItems, courses,
+} from "@/drizzle/schema";
+import type { TimetableEvent } from "@/drizzle/schema";
+import { eq, isNull, and, or, not } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+  buildCourseIndex, buildCourseSchedule, matchEventToCourse,
+  extractWeekRefs, resolveWeekRef, pickEventInWeek, preferredKindFor,
+  type CourseSchedule,
+} from "@/lib/schedule";
 
-// ── ISO week helpers ───────────────────────────────────────────────────────
+/** Coursework is due this long before the session it belongs to. */
+const DUE_BEFORE_EVENT_MS = 60 * 60 * 1000;
 
-function getISOWeek(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+/**
+ * Remedial quizzes are the one item that follows its lecture rather than
+ * preceding it — the student sits it after the material is covered.
+ */
+const REMEDIAL_RE = /remedial\s*quiz/i;
+const REMEDIAL_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+
+/** How many failures to name in the UI before we stop listing them. */
+const MAX_REPORTED_FAILURES = 12;
+
+export type AttachFailure = {
+  title:  string;
+  course: string;
+  reason: string;
+};
+
+export type AttachResult = {
+  /** Undated (or previously timetable-dated) tasks we looked at. */
+  considered:     number;
+  /** Tasks that now have a deadline derived from a calendar event. */
+  matched:        number;
+  /** Of those, ones whose existing derived date was corrected. */
+  corrected:      number;
+  /** Nothing in the title said which week it belongs to. */
+  noWeekRef:      number;
+  /** The course has no calendar events at all — nothing to match against. */
+  noCourseEvents: number;
+  /** A week was named, but that week holds no session for this course. */
+  noEventForWeek: number;
+  /** Calendar events repaired with a course id by the pre-pass. */
+  relinkedEvents: number;
+  /** Reading-list rows given a concrete lecture date. */
+  readingsDated:  number;
+  failures:       AttachFailure[];
+};
+
+/**
+ * Pre-pass: give every orphaned calendar event a course.
+ *
+ * MyTimetable writes "BT1201 - Introduction to Business" while Canvas
+ * stores the code as "BT1201_2025_2", so the old exact-string match failed
+ * and left course_canvas_id NULL. matchEventToCourse() normalises both
+ * sides, and falls back to course-name words when no code is present.
+ */
+async function relinkOrphanedEvents(): Promise<number> {
+  const knownCourses = await db
+    .select({ canvasId: courses.canvasId, name: courses.name, courseCode: courses.courseCode })
+    .from(courses);
+  if (!knownCourses.length) return 0;
+
+  const index   = buildCourseIndex(knownCourses);
+  const orphans = await db.select().from(timetableEvents)
+    .where(isNull(timetableEvents.courseCanvasId));
+
+  let relinked = 0;
+  const now = new Date().toISOString();
+
+  for (const e of orphans) {
+    const hit = matchEventToCourse(index, {
+      title:       e.title,
+      description: e.description,
+      location:    e.location,
+    });
+    if (!hit) continue;
+    await db.update(timetableEvents)
+      .set({ courseCanvasId: hit.canvasId, courseName: hit.name, updatedAt: now })
+      .where(eq(timetableEvents.id, e.id));
+    relinked++;
+  }
+  return relinked;
 }
 
-/** Extract ISO week number from strings like "wk36", "Week 36", "Module 3 (wk38)", "(wk44)" */
-function extractWeekNumber(text: string): number | null {
-  const patterns = [
-    /\bw(?:ee)?k[\s_-]?(\d{2})\b/i,   // wk36, week36, week 36
-    /\(wk(\d{2})\)/i,                   // (wk36)
-    /\bweek[\s_-]?(\d{1,2})\b/i,       // Week 3
-    /\bmodule[\s\d\-]+\(wk(\d{2})\)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return parseInt(m[1], 10);
-  }
-  return null;
-}
+/** One CourseSchedule per course that has any calendar events. */
+async function loadSchedules(): Promise<Map<string, CourseSchedule>> {
+  const all = await db.select().from(timetableEvents)
+    .where(not(isNull(timetableEvents.courseCanvasId)));
 
-/** Find the timetable event for a given course + ISO week number */
-async function findEventForWeek(
-  courseCanvasId: string,
-  weekNumber: number,
-  year = 2026,
-): Promise<string | null> {
-  // Week start/end boundaries
-  const jan4    = new Date(Date.UTC(year, 0, 4));
-  const dow     = (jan4.getUTCDay() + 6) % 7;
-  const week1Mon = new Date(jan4);
-  week1Mon.setUTCDate(jan4.getUTCDate() - dow);
-  const weekStart = new Date(week1Mon);
-  weekStart.setUTCDate(week1Mon.getUTCDate() + (weekNumber - 1) * 7);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
-
-  const startIso = weekStart.toISOString();
-  const endIso   = weekEnd.toISOString().replace("T00:00:00", "T23:59:59");
-
-  // Find events for this course in this week
-  const events = await db.select()
-    .from(timetableEvents)
-    .where(
-      and(
-        eq(timetableEvents.courseCanvasId, courseCanvasId),
-        gte(timetableEvents.startAt, startIso),
-        lte(timetableEvents.startAt, endIso),
-      )
-    )
-    .orderBy(asc(timetableEvents.startAt));
-
-  if (!events.length) return null;
-
-  // Math: skip Friday workshops, use earliest non-Friday event
-  if (courseCanvasId === "57923") {
-    const nonFriday = events.find((e) => new Date(e.startAt).getUTCDay() !== 5);
-    return (nonFriday ?? events[0]).startAt;
+  const byCourse = new Map<string, TimetableEvent[]>();
+  for (const e of all) {
+    if (!e.courseCanvasId) continue;
+    const list = byCourse.get(e.courseCanvasId);
+    if (list) list.push(e);
+    else byCourse.set(e.courseCanvasId, [e]);
   }
 
-  return events[0].startAt;
+  const out = new Map<string, CourseSchedule>();
+  for (const [courseId, events] of byCourse) {
+    out.set(courseId, buildCourseSchedule(courseId, events));
+  }
+  return out;
 }
 
 // ── Main action ────────────────────────────────────────────────────────────
 
-// ── Module → ISO week mapping (hardcoded from course manuals) ─────────────
-// Key: courseCanvasId, value: map of module-number-regex → ISO week
-const MODULE_WEEK_MAP: Record<string, Array<{ pattern: RegExp; week: number }>> = {
-  // BT1201 Introduction to Business
-  "57918": [
-    { pattern: /module\s*1\b/i,  week: 36 },
-    { pattern: /module\s*2\b/i,  week: 37 },
-    { pattern: /module\s*3\b/i,  week: 38 },
-    { pattern: /module\s*4\b/i,  week: 39 },
-    { pattern: /module\s*5\b/i,  week: 40 },
-    { pattern: /module\s*6\b/i,  week: 41 },
-    { pattern: /module\s*7\b/i,  week: 44 },
-    { pattern: /module\s*8\b/i,  week: 45 },
-    { pattern: /module\s*9\b/i,  week: 46 },
-    { pattern: /module\s*10\b/i, week: 47 },
-    { pattern: /module\s*11\b/i, week: 48 },
-    { pattern: /module\s*12\b/i, week: 49 },
-    { pattern: /\bwk36\b/i,      week: 36 },
-    { pattern: /\bwk37\b/i,      week: 37 },
-    { pattern: /\bwk38\b/i,      week: 38 },
-    { pattern: /\bwk39\b/i,      week: 39 },
-    { pattern: /\bwk40\b/i,      week: 40 },
-    { pattern: /\bwk41\b/i,      week: 41 },
-    { pattern: /\bwk44\b/i,      week: 44 },
-    { pattern: /\bwk45\b/i,      week: 45 },
-    { pattern: /\bwk46\b/i,      week: 46 },
-    { pattern: /\bwk47\b/i,      week: 47 },
-    { pattern: /\bwk48\b/i,      week: 48 },
-    { pattern: /\bwk49\b/i,      week: 49 },
-  ],
-  // BT1202 Organisational Behaviour
-  "57916": [
-    { pattern: /\blecture\s*1\b|week\s*36\b/i, week: 36 },
-    { pattern: /\blecture\s*2\b|week\s*37\b/i, week: 37 },
-    { pattern: /\blecture\s*3\b|week\s*38\b/i, week: 38 },
-    { pattern: /\blecture\s*4\b|week\s*39\b/i, week: 39 },
-    { pattern: /\blecture\s*5\b|week\s*40\b/i, week: 40 },
-    { pattern: /\blecture\s*6\b|week\s*41\b/i, week: 41 },
-    { pattern: /\bworkshop\b/i,                   week: 40 },
-  ],
-};
+export async function attachTimetableDeadlines(): Promise<AttachResult> {
+  const result: AttachResult = {
+    considered: 0, matched: 0, corrected: 0,
+    noWeekRef: 0, noCourseEvents: 0, noEventForWeek: 0,
+    relinkedEvents: 0, readingsDated: 0, failures: [],
+  };
 
-// Math: Unit X.Y → course week X → ISO week = 35 + X
-// e.g. Unit 3.1 → week 3 → ISO 38. Week N title → ISO 35 + N.
-// Handled separately in matchModuleWeek() below.
+  result.relinkedEvents = await relinkOrphanedEvents();
+  const schedules = await loadSchedules();
 
-// Courses to skip deadline assignment (not real coursework)
-const SKIP_COURSES = new Set(["43161", "56744", "56741", "42446"]);
-
-function matchModuleWeek(courseCanvasId: string, text: string): number | null {
-  // Math (BT1304): Unit/Week X.Y → ISO week 35 + X (no block gap, linear)
-  if (courseCanvasId === "57923") {
-    const dotMatch  = text.match(/\b(\d+)\.(\d+)/);
-    if (dotMatch) return 35 + parseInt(dotMatch[1], 10);
-    const unitMatch = text.match(/\bunit\s*(\d+)\b/i);
-    if (unitMatch) return 35 + parseInt(unitMatch[1], 10);
-    const weekMatch = text.match(/\bweek\s*(\d+)\b/i);
-    if (weekMatch) return 35 + parseInt(weekMatch[1], 10);
-    const wkMatch   = text.match(/\bwk(\d+)\b/i);
-    if (wkMatch) return parseInt(wkMatch[1], 10);
-    return null;
+  const courseNames = new Map<string, string>();
+  for (const c of await db.select({ id: courses.canvasId, name: courses.name }).from(courses)) {
+    courseNames.set(c.id, c.name);
   }
 
-  // IB (BT1201): Module X.Y or X — explicit mapping from course manual
-  // Block 1: modules 1-6 → wk36-41. Gap: wk42-43 (exams+self study).
-  // Block 2: modules 7-12 → wk44-49.
-  if (courseCanvasId === "57918") {
-    const IB_MODULE_WEEK: Record<number, number> = {
-      1: 36, 2: 37, 3: 38, 4: 39, 5: 40, 6: 41,
-      7: 44, 8: 45, 9: 46, 10: 47, 11: 48, 12: 49,
-    };
-    // Extract module number from "X.Y", "Module X", "X " patterns
-    const dotMatch = text.match(/\b(\d+)\.(\d+)/);
-    const modNum   = dotMatch
-      ? parseInt(dotMatch[1], 10)
-      : (() => {
-          const m = text.match(/\bmodule\s*(\d+)\b/i) ?? text.match(/\b(\d+)\b/);
-          return m ? parseInt(m[1], 10) : null;
-        })();
-    if (modNum !== null && IB_MODULE_WEEK[modNum]) return IB_MODULE_WEEK[modNum];
-    // Fallback: wkXX already ISO
-    const wkMatch = text.match(/\bwk(\d+)\b/i);
-    if (wkMatch) return parseInt(wkMatch[1], 10);
-    return null;
-  }
-  // First try generic week/wk regex
-  const generic = extractWeekNumber(text);
-  if (generic) return generic;
-  // Then try course-specific module patterns
-  const map = MODULE_WEEK_MAP[courseCanvasId];
-  if (!map) return null;
-  for (const { pattern, week } of map) {
-    if (pattern.test(text)) return week;
-  }
-  return null;
-}
+  const note = (title: string, courseId: string, reason: string) => {
+    if (result.failures.length < MAX_REPORTED_FAILURES) {
+      result.failures.push({ title, course: courseNames.get(courseId) ?? courseId, reason });
+    }
+  };
 
-export async function attachTimetableDeadlines(): Promise<{
-  matched: number; skipped: number; noEvents: number;
-}> {
-  let matched = 0, skipped = 0, noEvents = 0;
+  // Tasks with no date at all, plus ones we dated ourselves last time —
+  // re-deriving those is how a corrected or re-published timetable
+  // propagates. A real Canvas deadline is never touched.
+  const candidates = await db.select().from(tasks).where(
+    and(
+      isNull(tasks.completedAt),
+      or(isNull(tasks.dueAt), eq(tasks.deadlineSource, "timetable")),
+    ),
+  );
+  result.considered = candidates.length;
 
-  const undated = await db.select().from(tasks)
-    .where(and(isNull(tasks.dueAt), isNull(tasks.completedAt)));
+  const now = new Date().toISOString();
 
-  for (const task of undated) {
-    // Skip non-coursework courses
-    if (SKIP_COURSES.has(task.courseCanvasId)) { skipped++; continue; }
-
-    // Try to find a week number from title + description
-    const searchText = [task.title, task.description ?? "", task.itemType ?? ""].join(" ");
-    const weekNum = matchModuleWeek(task.courseCanvasId, searchText);
-
-    if (!weekNum) { skipped++; continue; }
-
-    const eventDate = await findEventForWeek(task.courseCanvasId, weekNum);
-    if (!eventDate) { noEvents++; continue; }
-
-    // Due 1 hour before lecture
-    const due = new Date(eventDate);
-    due.setHours(due.getHours() - 1);
-
-    // Remedial Quiz gets +2 days after the lecture date
-    if (/remedial\s*quiz/i.test(task.title)) {
-      due.setDate(due.getDate() + 2);
+  for (const task of candidates) {
+    const schedule = schedules.get(task.courseCanvasId);
+    if (!schedule || schedule.weeks.length === 0) {
+      result.noCourseEvents++;
+      note(task.title, task.courseCanvasId, "no calendar events for this course");
+      continue;
     }
 
+    const searchText = [task.title, task.itemType ?? "", task.description ?? ""].join(" ");
+    const refs = extractWeekRefs(searchText);
+    if (refs.length === 0) {
+      result.noWeekRef++;
+      note(task.title, task.courseCanvasId, "no week or module number in the title");
+      continue;
+    }
+
+    const resolved = resolveWeekRef(schedule, refs);
+    if (!resolved) {
+      result.noEventForWeek++;
+      note(task.title, task.courseCanvasId, `week "${refs[0].token}" has no session on the calendar`);
+      continue;
+    }
+
+    const event = pickEventInWeek(resolved.week, preferredKindFor(searchText));
+    const start = new Date(event.startAt).getTime();
+    const dueMs = REMEDIAL_RE.test(task.title)
+      ? start + REMEDIAL_GRACE_MS
+      : start - DUE_BEFORE_EVENT_MS;
+    const dueAt = new Date(dueMs).toISOString();
+
+    if (task.dueAt === dueAt && task.linkedEventId === event.id) {
+      result.matched++;   // already correct; no write needed
+      continue;
+    }
+    if (task.dueAt && task.dueAt !== dueAt) result.corrected++;
+
     await db.update(tasks)
-      .set({ dueAt: due.toISOString(), updatedAt: new Date().toISOString() })
+      .set({
+        dueAt,
+        deadlineSource: "timetable",
+        linkedEventId:  event.id,
+        updatedAt:      now,
+      })
       .where(eq(tasks.id, task.id));
-    matched++;
+    result.matched++;
   }
 
-  // Attach lecture_date to reading_items with weekNumber but no lectureDate
-  const undatedReadings = await db.select().from(readingItems)
-    .where(and(isNull(readingItems.lectureDate), not(isNull(readingItems.weekNumber))));
+  // ── Reading list: same resolution, but the date is the lecture itself ──
+  const readings = await db.select().from(readingItems);
 
-  for (const r of undatedReadings) {
-    if (!r.weekNumber) continue;
-    const eventDate = await findEventForWeek(r.courseCanvasId, r.weekNumber);
-    if (!eventDate) continue;
+  for (const r of readings) {
+    const schedule = schedules.get(r.courseCanvasId);
+    if (!schedule || schedule.weeks.length === 0) continue;
+
+    // An explicit week_number from the syllabus extractor wins; otherwise
+    // read the week out of the lecture label ("Week 3", "Lecture 5").
+    const refs = r.weekNumber
+      ? [{ kind: "iso" as const, week: r.weekNumber, token: `week ${r.weekNumber}` },
+         { kind: "ordinal" as const, n: r.weekNumber, token: `week ${r.weekNumber}` }]
+      : extractWeekRefs(`${r.lectureLabel} ${r.readingText}`);
+    if (refs.length === 0) continue;
+
+    const resolved = resolveWeekRef(schedule, refs);
+    if (!resolved) continue;
+
+    const event = pickEventInWeek(resolved.week, "lecture");
+    if (r.lectureDate === event.startAt && r.linkedTimetableEventId === event.id) continue;
+
     await db.update(readingItems)
-      .set({ lectureDate: eventDate, updatedAt: new Date().toISOString() })
+      .set({
+        lectureDate:            event.startAt,
+        linkedTimetableEventId: event.id,
+        deadlineConfidence:     resolved.ref.kind === "iso" ? 0.9 : 0.75,
+        updatedAt:              now,
+      })
       .where(eq(readingItems.id, r.id));
+    result.readingsDated++;
   }
 
   revalidatePath("/");
   revalidatePath("/readings");
-  return { matched, skipped, noEvents };
+  revalidatePath("/timetable");
+  return result;
 }
 
 // ── iCal settings ─────────────────────────────────────────────────────────

@@ -5,6 +5,9 @@ import { assignmentToTask, moduleItemToTask, type CanvasAssignment, type CanvasM
 import { extractReadings } from "./extract";
 import { classifyItems } from "./classify";
 import { sql, eq, and } from "drizzle-orm";
+import {
+  CAMPUS_TZ, zonedWallTimeToUtc, buildCourseIndex, matchEventToCourse,
+} from "@/lib/schedule";
 
 type CanvasCourse = {
   id: number; name: string; course_code: string | null;
@@ -457,7 +460,21 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
       set: {
         title:          sql`excluded.title`,
         itemType:       sql`excluded.item_type`,
-        dueAt:          sql`excluded.due_at`,
+        // Do NOT blindly take Canvas's due_at here. Module items always
+        // report NULL, so a plain `excluded.due_at` wiped every deadline
+        // that attachTimetableDeadlines() had derived from the timetable —
+        // silently, on the next 6-hourly cron tick. A real Canvas date
+        // still wins; otherwise a timetable-derived date is preserved.
+        dueAt:          sql`CASE
+                              WHEN excluded.due_at IS NOT NULL THEN excluded.due_at
+                              WHEN tasks.deadline_source = 'timetable' THEN tasks.due_at
+                              ELSE NULL
+                            END`,
+        deadlineSource: sql`CASE
+                              WHEN excluded.due_at IS NOT NULL THEN 'canvas'
+                              WHEN tasks.deadline_source = 'timetable' THEN 'timetable'
+                              ELSE NULL
+                            END`,
         pointsPossible: sql`excluded.points_possible`,
         url:            sql`excluded.url`,
         description:    sql`excluded.description`,
@@ -764,52 +781,31 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
     // fall back to scanning the SUMMARY against a regex made from our
     // known course codes. Keeps matching precise: a generic "[A-Z]{2,}\d{3,}"
     // regex would over-match (RSM, IBA, etc.).
-    const courseCodeByName = new Map<string, { id: string; name: string }>();
-    const knownCodes: string[] = [];
-    const knownCourses = await db.select({ id: courses.canvasId, name: courses.name, code: courses.courseCode })
+    const knownCourses = await db
+      .select({ canvasId: courses.canvasId, name: courses.name, courseCode: courses.courseCode })
       .from(courses);
-    for (const c of knownCourses) {
-      if (c.code) {
-        courseCodeByName.set(c.code.toLowerCase(), { id: c.id, name: c.name });
-        knownCodes.push(c.code);
-      }
-    }
-    // Escape regex metacharacters in case a code ever contains one,
-    // then build a single alternation. Case-insensitive flag matches
-    // SUMMARYs written in either case.
-    const summaryCodeRegex = knownCodes.length
-      ? new RegExp(`\\b(?:${knownCodes.map(escapeRegex).join("|")})\\b`, "i")
-      : null;
+    const courseIndex = buildCourseIndex(knownCourses);
 
     let upserted = 0;
     for (const e of events) {
       const now = new Date().toISOString();
 
-      // 1. Try CATEGORIES (comma/semicolon-separated list).
-      const cat = (e.categories ?? "").toLowerCase().split(/[,;]/).map((s) => s.trim()).filter(Boolean)[0] ?? "";
-      let matched = courseCodeByName.get(cat);
-
-      // 1b. If the first CATEGORIES token wasn't a known code, scan the
-      //     whole CATEGORIES string too — MyTimetable sometimes prepends
-      //     "Course, " before the code, e.g. "Course, BT1205".
-      if (!matched && summaryCodeRegex && e.categories) {
-        const m = e.categories.match(summaryCodeRegex);
-        if (m) matched = courseCodeByName.get(m[0].toLowerCase());
-      }
-
-      // 2. Fall back to a code anywhere in the SUMMARY — common in
-      //    MyTimetable exports where SUMMARY is "<CODE> - <title>".
-      if (!matched && summaryCodeRegex && e.summary) {
-        const m = e.summary.match(summaryCodeRegex);
-        if (m) {
-          matched = courseCodeByName.get(m[0].toLowerCase());
-        }
-      }
+      // Normalised code match across CATEGORIES / SUMMARY / DESCRIPTION /
+      // LOCATION, then a course-name-word fallback. The previous exact
+      // string comparison against Canvas's `course_code` ("BT1201_2025_2")
+      // never matched MyTimetable's "BT1201 - Introduction to Business",
+      // leaving course_canvas_id NULL on every event.
+      const matched = matchEventToCourse(courseIndex, {
+        title:       e.summary,
+        description: e.description,
+        location:    e.location,
+        categories:  e.categories,
+      });
 
       await db.insert(timetableEvents).values({
         canvasId:       e.uid,
         source:         "ical",
-        courseCanvasId: matched?.id ?? null,
+        courseCanvasId: matched?.canvasId ?? null,
         courseName:     matched?.name ?? null,
         title:          e.summary,
         description:    e.description ?? null,
@@ -825,7 +821,7 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
         target: timetableEvents.canvasId,
         set: {
           source:         "ical",
-          courseCanvasId: matched?.id ?? null,
+          courseCanvasId: matched?.canvasId ?? null,
           courseName:     matched?.name ?? null,
           title:          e.summary,
           description:    e.description ?? null,
@@ -1064,21 +1060,48 @@ function unescapeIcal(s: string): string {
     .replace(/\\\\/g, "\\");
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Parse an iCal DTSTART/DTEND value into an absolute instant.
+ *
+ * Three shapes exist in the wild:
+ *   - `20260914`                 → a date, no time
+ *   - `20260914T070000Z`         → an explicit UTC instant
+ *   - `20260914T090000` + TZID   → a wall-clock time in some timezone
+ *
+ * The last one is the common case for MyTimetable, and the one that used to
+ * be wrong: `new Date("2026-09-14T09:00:00")` resolves in the *server's*
+ * timezone, which is UTC on Vercel. A 09:00 Amsterdam lecture became 09:00Z
+ * and displayed as 11:00. We now honour the declared TZID, defaulting to the
+ * campus timezone rather than the server's.
+ */
+function parseIcalDate(value: string, fullName: string): Date {
+  const tzid = fullName.match(/TZID=([^;:]+)/i)?.[1]?.trim();
+  const tz   = isKnownTimeZone(tzid) ? tzid! : CAMPUS_TZ;
+
+  const y  = Number(value.slice(0, 4));
+  const mo = Number(value.slice(4, 6));
+  const d  = Number(value.slice(6, 8));
+
+  // DATE only: midnight campus-local, not midnight UTC.
+  if (/^\d{8}$/.test(value)) return zonedWallTimeToUtc(y, mo, d, 0, 0, 0, tz);
+
+  const h  = Number(value.slice(9, 11));
+  const mi = Number(value.slice(11, 13));
+  const s  = Number(value.slice(13, 15));
+
+  if (value.endsWith("Z")) {
+    return new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+  }
+  return zonedWallTimeToUtc(y, mo, d, h, mi, s, tz);
 }
 
-function parseIcalDate(value: string, fullName: string): Date {
-  // DATE only: YYYYMMDD → start of day UTC
-  if (/^\d{8}$/.test(value)) {
-    return new Date(`${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T00:00:00Z`);
+/** Guard against a bogus TZID crashing Intl at request time. */
+function isKnownTimeZone(tz: string | undefined): boolean {
+  if (!tz) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
   }
-  // DATE-TIME with Z (UTC) or with TZID (floating, treated as server-local
-  // — for EUR that means CET/CEST which is what the user's browser shows
-  // anyway since most EUR machines run in CET).
-  const m = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11)}:${value.slice(11, 13)}:${value.slice(13, 15)}`;
-  if (value.endsWith("Z")) {
-    return new Date(`${m}.000Z`);
-  }
-  return new Date(m); // server-local time
 }

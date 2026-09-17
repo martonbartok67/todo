@@ -1,5 +1,9 @@
 {
   "compilerOptions": {
+    // es2020 so Map/Set/matchAll iteration works without downlevelIteration.
+    // Next.js compiles with SWC and targets modern browsers regardless; this
+    // only aligns `tsc --noEmit` with what actually ships.
+    "target": "es2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,

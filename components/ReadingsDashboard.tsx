@@ -8,6 +8,7 @@ import {
 import type { ReadingItem } from "@/drizzle/schema";
 import { ReadingRow } from "./ReadingRow";
 import { ReadingSheet, type SheetReading } from "./ReadingSheet";
+import { courseColor } from "@/lib/colors";
 
 type CourseGroup = {
   courseName:     string;
@@ -29,27 +30,6 @@ function groupReadings(items: ReadingItem[]): CourseGroup[] {
     lecture.items.push(item);
   }
   return Array.from(courseMap.values());
-}
-
-const COURSE_COLORS: Record<string, string> = {
-  Economics:     "#2C6958",
-  Mathematics:   "#7A4F83",
-  Statistics:    "#286982",
-  Marketing:     "#3D7C6F",
-  Psychology:    "#C9991A",
-  Strategy:      "#D4574D",
-  Biology:       "#6B73AA",
-  Communication: "#557AA3",
-};
-
-function courseColor(name: string): string {
-  for (const [key, val] of Object.entries(COURSE_COLORS)) {
-    if (name.toLowerCase().includes(key.toLowerCase())) return val;
-  }
-  const colors = ["#2C6958","#7A4F83","#286982","#3D7C6F","#C9991A","#D4574D","#6B73AA","#557AA3"];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % colors.length;
-  return colors[Math.abs(h)];
 }
 
 export default function ReadingsDashboard({
@@ -83,25 +63,13 @@ export default function ReadingsDashboard({
   return (
     <>
       {/* Sticky header */}
-      <header
-        className="sticky top-0 z-30 md:relative"
-        style={{
-          paddingTop: "54px",
-          paddingLeft: "18px",
-          paddingRight: "18px",
-          paddingBottom: "12px",
-          background: "color-mix(in srgb, var(--background) 95%, transparent)",
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          marginBottom: "0",
-        }}
-      >
+      <header className="page-header md:!static md:!backdrop-blur-none md:mb-5">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 style={{ fontSize: "24px", fontWeight: 800, lineHeight: 1.2, color: "var(--foreground)" }}>
+            <h1 className="page-title">
               Readings
             </h1>
-            <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }} className="tabular-nums">
+            <p className="page-subtitle tabular-nums">
               {items.length > 0
                 ? `${doneCount}/${items.length} complete`
                 : "AI-extracted from course manuals"}
@@ -130,9 +98,8 @@ export default function ReadingsDashboard({
         {/* Table not ready */}
         {!tableReady && (
           <div
+            className="card"
             style={{
-              borderRadius: "16px",
-              background: "var(--surface-card)",
               padding: "20px",
               fontSize: "14px",
               color: "var(--muted)",
@@ -148,9 +115,8 @@ export default function ReadingsDashboard({
 
         {tableReady && items.length === 0 && (
           <div
+            className="card"
             style={{
-              borderRadius: "16px",
-              background: "var(--surface-card)",
               padding: "20px",
               fontSize: "14px",
               color: "var(--muted)",
@@ -247,7 +213,7 @@ export default function ReadingsDashboard({
                                 transition={{ duration: 0.16 }}
                                 style={{ overflow: "hidden" }}
                               >
-                                <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                                <div className="card">
                                   <ul>
                                     <AnimatePresence mode="popLayout">
                                       {lecture.items.map((item) => (

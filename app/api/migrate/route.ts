@@ -76,6 +76,51 @@ export async function GET(req: NextRequest) {
       results.push("✓ course index ensured");
     } catch (e) { results.push(`! course index: ${e}`); }
 
+    // ── Deadline provenance on tasks ───────────────────────────────────
+    // `deadline_source` is what lets the Canvas sync tell a real Canvas due
+    // date apart from one we derived from the timetable, so a 6-hourly sync
+    // stops wiping derived deadlines. `linked_event_id` records which
+    // calendar session a deadline came from.
+    for (const [col, ddl] of [
+      ["deadline_source", "ALTER TABLE tasks ADD COLUMN deadline_source TEXT"],
+      ["linked_event_id", "ALTER TABLE tasks ADD COLUMN linked_event_id INTEGER"],
+    ] as [string, string][]) {
+      try {
+        const cols = await db.all(sql`SELECT name FROM pragma_table_info('tasks')`);
+        const colNames = (cols as { name: string }[]).map(c => c.name);
+        if (!colNames.includes(col)) {
+          await db.run(sql.raw(ddl));
+          results.push(`✓ added tasks.${col}`);
+        } else {
+          results.push(`- tasks.${col} already exists`);
+        }
+      } catch (e) { results.push(`! tasks.${col}: ${e}`); }
+    }
+
+    // Backfill: every existing due date we didn't derive came from Canvas.
+    try {
+      await db.run(sql`UPDATE tasks SET deadline_source = 'canvas'
+                       WHERE due_at IS NOT NULL AND deadline_source IS NULL`);
+      results.push("✓ backfilled deadline_source='canvas' for existing due dates");
+    } catch (e) { results.push(`! backfill deadline_source: ${e}`); }
+
+    // ── Deadline alignment columns on reading_items ─────────────────────
+    for (const [col, ddl] of [
+      ["linked_timetable_event_id", "ALTER TABLE reading_items ADD COLUMN linked_timetable_event_id INTEGER"],
+      ["deadline_confidence",       "ALTER TABLE reading_items ADD COLUMN deadline_confidence REAL"],
+    ] as [string, string][]) {
+      try {
+        const cols = await db.all(sql`SELECT name FROM pragma_table_info('reading_items')`);
+        const colNames = (cols as { name: string }[]).map(c => c.name);
+        if (!colNames.includes(col)) {
+          await db.run(sql.raw(ddl));
+          results.push(`✓ added reading_items.${col}`);
+        } else {
+          results.push(`- reading_items.${col} already exists`);
+        }
+      } catch (e) { results.push(`! reading_items.${col}: ${e}`); }
+    }
+
     // Report current state
     const tables = await db.all(sql`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`);
     const indexes = await db.all(sql`SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='reading_items'`);

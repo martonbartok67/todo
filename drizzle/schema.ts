@@ -42,6 +42,18 @@ export const tasks = sqliteTable("tasks", {
                           .default("unclassified"),
   classificationReason: text("classification_reason"),     // short AI explanation
   classifiedAt:         text("classified_at"),             // ISO timestamp
+
+  // ── Deadline provenance ──────────────────────────────────────────────
+  // How `dueAt` got its value:
+  //   "canvas"    → Canvas itself supplied a due date (never overwritten)
+  //   "timetable" → derived from a calendar event by attachTimetableDeadlines
+  //   NULL        → no due date, or a legacy row from before this column
+  // Recording this is what makes the derivation *re-runnable*: a re-run can
+  // safely recompute every "timetable" date (e.g. after the schedule
+  // changes) without ever clobbering a real Canvas deadline.
+  deadlineSource:  text("deadline_source", { enum: ["canvas", "timetable"] }),
+  // The timetable_events row this deadline was derived from, when any.
+  linkedEventId:   integer("linked_event_id"),
 }, (t) => ({
   canvasSourceIdx:   uniqueIndex("tasks_canvas_source_idx").on(t.canvasId, t.sourceType),
   courseIdx:         index("tasks_course_idx").on(t.courseCanvasId),

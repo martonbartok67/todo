@@ -43,7 +43,7 @@ const TABLE_DDL: Record<string, string[]> = {
     `CREATE UNIQUE INDEX IF NOT EXISTS courses_canvas_id_idx ON courses (canvas_id)`,
   ],
   tasks: [
-    `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, course_canvas_id TEXT NOT NULL, canvas_id TEXT NOT NULL, source_type TEXT NOT NULL, title TEXT NOT NULL, item_type TEXT, due_at TEXT, points_possible REAL, url TEXT, description TEXT, completed_at TEXT, snoozed_until TEXT, last_synced_at TEXT NOT NULL DEFAULT (datetime('now')), created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), classification TEXT NOT NULL DEFAULT 'unclassified', classification_reason TEXT, classified_at TEXT)`,
+    `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, course_canvas_id TEXT NOT NULL, canvas_id TEXT NOT NULL, source_type TEXT NOT NULL, title TEXT NOT NULL, item_type TEXT, due_at TEXT, points_possible REAL, url TEXT, description TEXT, completed_at TEXT, snoozed_until TEXT, last_synced_at TEXT NOT NULL DEFAULT (datetime('now')), created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), classification TEXT NOT NULL DEFAULT 'unclassified', classification_reason TEXT, classified_at TEXT, deadline_source TEXT, linked_event_id INTEGER)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS tasks_canvas_source_idx ON tasks (canvas_id, source_type)`,
     `CREATE INDEX IF NOT EXISTS tasks_course_idx ON tasks (course_canvas_id)`,
     `CREATE INDEX IF NOT EXISTS tasks_due_at_idx ON tasks (due_at)`,
@@ -81,6 +81,10 @@ const COLUMN_MIGRATIONS: Record<string, Array<{ column: string; ddl: string }>> 
     { column: "classification",        ddl: "ALTER TABLE tasks ADD COLUMN classification TEXT NOT NULL DEFAULT 'unclassified'" },
     { column: "classification_reason", ddl: "ALTER TABLE tasks ADD COLUMN classification_reason TEXT" },
     { column: "classified_at",         ddl: "ALTER TABLE tasks ADD COLUMN classified_at TEXT" },
+    // Tells a Canvas-published due date apart from one derived from the
+    // timetable, so the 6-hourly sync stops overwriting derived deadlines.
+    { column: "deadline_source",       ddl: "ALTER TABLE tasks ADD COLUMN deadline_source TEXT" },
+    { column: "linked_event_id",       ddl: "ALTER TABLE tasks ADD COLUMN linked_event_id INTEGER" },
   ],
   timetable_events: [
     { column: "source",       ddl: "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'" },

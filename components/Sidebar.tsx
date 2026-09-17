@@ -24,7 +24,7 @@ const MAIN_NAV: NavItem[] = [
   { id: "tasks",     label: "Tasks",     href: "/",          icon: <SquareIcon /> },
   { id: "resources", label: "Resources", href: "/resources", icon: <FolderIcon /> },
   { id: "readings",  label: "Readings",  href: "/readings",  icon: <BookIcon /> },
-  { id: "timetable", label: "Timetable", href: "/timetable", icon: <ClockIcon /> },
+  { id: "timetable", label: "Schedule", href: "/timetable", icon: <ClockIcon /> },
   { id: "settings",  label: "Settings",  href: "/settings",  icon: <GearIcon /> },
 ];
 
@@ -36,11 +36,40 @@ export function Sidebar({
   course?: { id: string; name: string };
 }) {
   return (
-    <aside className="hidden md:flex w-56 shrink-0 flex-col gap-1 border-r border-border bg-background h-screen sticky top-0 px-4 py-6">
-      {/* App title */}
-      <div className="px-2 pb-4 mb-2 border-b border-border">
-        <p className="text-[15px] font-semibold tracking-tight">Canvas Sync</p>
-        <p className="text-[11px] text-muted mt-0.5">Task tracker</p>
+    <aside
+      className="hidden md:flex w-60 shrink-0 flex-col gap-1 h-screen sticky top-0 px-3 py-6"
+      style={{
+        background: "var(--background-alt)",
+        borderRight: "1px solid var(--border)",
+      }}
+    >
+      {/* Wordmark */}
+      <div className="px-3 pb-5 mb-2" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            style={{
+              width: "28px", height: "28px", borderRadius: "9px",
+              background: "var(--accent-gradient)", color: "var(--accent-fg)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "14px", fontWeight: 900, flexShrink: 0,
+              boxShadow: "var(--shadow-sm)",
+            }}
+          >
+            ✓
+          </span>
+          <span className="min-w-0">
+            <span style={{
+              display: "block", fontSize: "14px", fontWeight: 800,
+              letterSpacing: "-0.02em", color: "var(--foreground)",
+            }}>
+              Canvas Sync
+            </span>
+            <span style={{ display: "block", fontSize: "11px", color: "var(--muted)" }}>
+              Task tracker
+            </span>
+          </span>
+        </div>
       </div>
 
       {MAIN_NAV.map((item) => {
@@ -50,45 +79,51 @@ export function Sidebar({
             key={item.id}
             href={item.href}
             aria-current={isActive ? "page" : undefined}
-            className={[
-              "relative flex items-center gap-2.5 pl-4 pr-3 py-2 rounded-lg text-[13px] transition-colors",
-              isActive
-                ? "bg-surface-1 text-foreground font-medium"
-                : "text-muted hover:text-foreground hover:bg-surface-1",
-            ].join(" ")}
+            className="relative flex items-center gap-2.5 px-3 py-2 text-[13px]"
+            style={{
+              borderRadius: "var(--r-md)",
+              fontWeight: isActive ? 800 : 600,
+              color: isActive ? "var(--accent)" : "var(--muted)",
+              background: isActive ? "var(--accent-soft)" : "transparent",
+              transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)",
+            }}
           >
-            {/* Left accent strip — only visible on the active item. */}
-            {isActive && (
-              <span
-                aria-hidden
-                className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-foreground"
-              />
-            )}
-            <span className="w-4 h-4 shrink-0">{item.icon}</span>
+            <span className="w-[17px] h-[17px] shrink-0">{item.icon}</span>
             <span className="flex-1 truncate">{item.label}</span>
+            {isActive && (
+              <span aria-hidden style={{
+                width: "5px", height: "5px", borderRadius: "50%", background: "var(--accent)",
+              }} />
+            )}
           </Link>
         );
       })}
 
       {/* Course context — only rendered when inside /subjects/[id] */}
       {course && (
-        <div className="mt-6 px-3 py-3 rounded-lg bg-surface-1 border border-border">
-          <p className="text-[10px] uppercase tracking-widest text-muted font-medium">
-            Subject
-          </p>
-          <p className="text-[13px] font-medium mt-1 truncate">{course.name}</p>
+        <div
+          className="mt-6 px-3 py-3"
+          style={{
+            borderRadius: "var(--r-md)",
+            background: "var(--surface-card)",
+            border: "1px solid var(--border)",
+            boxShadow: "var(--shadow-sm)",
+          }}
+        >
+          <p className="section-label">Subject</p>
+          <p className="text-[13px] font-bold mt-1.5 truncate">{course.name}</p>
           <Link
             href="/"
-            className="text-[11px] text-muted hover:text-foreground mt-2 inline-block transition-colors"
+            className="text-[11px] mt-2 inline-block transition-opacity hover:opacity-70"
+            style={{ color: "var(--muted)", fontWeight: 700 }}
           >
-            ← Back to all subjects
+            ← All subjects
           </Link>
         </div>
       )}
 
-      {/* Spacer + theme toggle pinned at the bottom */}
-      <div className="mt-auto pt-4 border-t border-border">
-        {/* ThemeToggle is rendered here by PageChrome in a wrapper below */}
+      <div className="mt-auto pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+        {/* ThemeToggle is rendered by PageChrome */}
         <div id="sidebar-theme-slot" />
       </div>
     </aside>

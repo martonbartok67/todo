@@ -1,17 +1,22 @@
 "use client";
 
+import { forwardRef } from "react";
 import { motion } from "framer-motion";
 import { completeReading, uncompleteReading } from "@/app/actions/readings";
 import type { ReadingItem } from "@/drizzle/schema";
 
-export function ReadingRow({
+type ReadingRowProps = {
+  item:          ReadingItem;
+  onComplete?:   (id: number) => void;
+  onUncomplete?: (id: number) => void;
+  onEdit?:       (item: ReadingItem) => void;
+};
+
+/** forwardRef because this renders inside `AnimatePresence mode="popLayout"`,
+ *  which measures its direct child through a ref. */
+export const ReadingRow = forwardRef<HTMLLIElement, ReadingRowProps>(function ReadingRow({
   item, onComplete, onUncomplete, onEdit,
-}: {
-  item:           ReadingItem;
-  onComplete?:    (id: number) => void;
-  onUncomplete?:  (id: number) => void;
-  onEdit?:        (item: ReadingItem) => void;
-}) {
+}, ref) {
   const done = !!item.completedAt;
   const handleToggle = () => {
     if (done && onUncomplete) onUncomplete(item.id);
@@ -22,6 +27,7 @@ export function ReadingRow({
 
   return (
     <motion.li
+      ref={ref}
       layout
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
@@ -94,4 +100,4 @@ export function ReadingRow({
       </div>
     </motion.li>
   );
-}
+});

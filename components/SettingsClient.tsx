@@ -1,5 +1,5 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useTheme } from "next-themes";
 import { saveIcalUrl, clearIcalUrl } from "@/app/actions/timetable";
 import { toast } from "sonner";
@@ -10,16 +10,10 @@ type LastSync = { startedAt: string; status: string; tasksUpserted: number } | n
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section style={{ marginBottom: "24px" }}>
-      <p style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)", marginBottom: "8px", paddingLeft: "4px" }}>
+      <p className="section-label" style={{ marginBottom: "8px", paddingLeft: "4px" }}>
         {title}
       </p>
-      <div
-        style={{
-          borderRadius: "16px",
-          background: "var(--surface-card)",
-          overflow: "hidden",
-        }}
-      >
+      <div className="card">
         {children}
       </div>
     </section>
@@ -36,7 +30,7 @@ function Row({ label, sublabel, children }: {
     >
       <div className="min-w-0">
         <p style={{ fontSize: "14px", fontWeight: 600, color: "var(--foreground)" }}>{label}</p>
-        {sublabel && <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>{sublabel}</p>}
+        {sublabel && <p className="page-subtitle">{sublabel}</p>}
       </div>
       {children && <div style={{ flexShrink: 0 }}>{children}</div>}
     </div>
@@ -90,6 +84,11 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   lastSync:  LastSync;
 }) {
   const { theme, setTheme } = useTheme();
+  // next-themes can only know the theme in the browser, so the server render
+  // has no active button. Deferring the active state to after mount keeps
+  // SSR and hydration byte-identical instead of logging a mismatch.
+  const [themeReady, setThemeReady] = useState(false);
+  useEffect(() => setThemeReady(true), []);
   const [icalInput, setIcalInput]   = useState(icalUrl   ?? "");
   const [labelInput, setLabelInput] = useState(icalLabel ?? "");
   const [isSaving, startSave]       = useTransition();
@@ -140,24 +139,12 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   return (
     <>
       {/* Sticky header */}
-      <header
-        className="sticky top-0 z-30 md:relative"
-        style={{
-          paddingTop: "54px",
-          paddingLeft: "18px",
-          paddingRight: "18px",
-          paddingBottom: "12px",
-          background: "color-mix(in srgb, var(--background) 95%, transparent)",
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          marginBottom: "0",
-        }}
-      >
-        <h1 style={{ fontSize: "24px", fontWeight: 800, lineHeight: 1.2, color: "var(--foreground)" }}>
+      <header className="page-header md:!static md:!backdrop-blur-none md:mb-5">
+        <h1 className="page-title">
           Settings
         </h1>
         {lastSync && (
-          <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>
+          <p className="page-subtitle">
             Last sync: {new Date(lastSync.startedAt).toLocaleString("en-NL", {
               day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
             })} · {lastSync.tasksUpserted} items · {lastSync.status}
@@ -170,24 +157,13 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
         <Section title="Appearance">
           <Row label="Theme" sublabel={theme === "dark" ? "Dark mode" : "Light mode"}>
             <div
-              className="inline-flex"
-              style={{ background: "var(--surface-1)", borderRadius: "12px", padding: "3px" }}
+              className="segmented"
             >
               {(["light", "dark"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTheme(t)}
-                  style={{
-                    padding: "5px 12px",
-                    borderRadius: "9px",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    transition: "all 0.15s",
-                    background: theme === t ? "var(--foreground)" : "transparent",
-                    color: theme === t ? "var(--background)" : "var(--muted)",
-                    border: "none",
-                    cursor: "pointer",
-                  }}
+                  data-active={themeReady && theme === t}
                 >
                   {t === "light" ? "☀️ Light" : "🌙 Dark"}
                 </button>

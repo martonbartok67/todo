@@ -9,12 +9,23 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
-        border:     "var(--border)",
+        background: {
+          DEFAULT: "var(--background)",
+          alt:     "var(--background-alt)",
+        },
+        foreground: {
+          DEFAULT: "var(--foreground)",
+          soft:    "var(--foreground-soft)",
+        },
+        border: {
+          DEFAULT: "var(--border)",
+          strong:  "var(--border-strong)",
+        },
         muted:      "var(--muted)",
         accent:     {
           DEFAULT: "var(--accent)",
+          soft:    "var(--accent-soft)",
+          strong:  "var(--accent-strong)",
           fg:      "var(--accent-fg)",
         },
         surface: {
@@ -30,6 +41,17 @@ const config: Config = {
           medium:   "var(--urgency-medium)",
           low:      "var(--urgency-low)",
         },
+      },
+      borderRadius: {
+        sm: "var(--r-sm)",
+        md: "var(--r-md)",
+        lg: "var(--r-lg)",
+        xl: "var(--r-xl)",
+      },
+      boxShadow: {
+        sm: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
       },
       fontFamily: {
         sans: ["Nunito", "ui-rounded", "system-ui", "sans-serif"],
