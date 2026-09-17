@@ -36,6 +36,8 @@ import {
   extractWeekRefs, resolveWeekRef, pickEventInWeek, preferredKindFor,
   type CourseSchedule,
 } from "@/lib/schedule";
+import { isMissingColumnError, TASK_COLUMNS_SAFE } from "@/lib/tasks";
+import { READING_COLUMNS_SAFE } from "@/lib/readings";
 
 /** Coursework is due this long before the session it belongs to. */
 const DUE_BEFORE_EVENT_MS = 60 * 60 * 1000;
@@ -193,12 +195,31 @@ export async function attachTimetableDeadlines(): Promise<AttachResult> {
   // Tasks with no date at all, plus ones we dated ourselves last time —
   // re-deriving those is how a corrected or re-published timetable
   // propagates. A real Canvas deadline is never touched.
-  const candidates = await db.select().from(tasks).where(
-    and(
-      isNull(tasks.completedAt),
-      or(isNull(tasks.dueAt), eq(tasks.deadlineSource, "timetable")),
-    ),
-  );
+  //
+  // deadline_source has been observed to be intermittently unreadable in
+  // production — see lib/tasks.ts's TASK_COLUMNS_SAFE for the full story.
+  // The column appears in both the WHERE clause and the projection here,
+  // so a "drop it from SELECT" fallback isn't enough on its own: the
+  // fallback path also drops the "re-derive a previous timetable date"
+  // half of the condition, since that half is the one that needs the
+  // column to mean anything. Undated tasks — the common case — are
+  // unaffected either way.
+  let candidates: (typeof tasks.$inferSelect)[];
+  try {
+    candidates = await db.select().from(tasks).where(
+      and(
+        isNull(tasks.completedAt),
+        or(isNull(tasks.dueAt), eq(tasks.deadlineSource, "timetable")),
+      ),
+    );
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    console.error("attachTimetableDeadlines: deadline_source unreadable, falling back to undated-only:", e);
+    const safeRows = await db.select(TASK_COLUMNS_SAFE).from(tasks).where(
+      and(isNull(tasks.completedAt), isNull(tasks.dueAt)),
+    );
+    candidates = safeRows.map((r) => ({ ...r, deadlineSource: null, linkedEventId: null }));
+  }
   result.considered = candidates.length;
 
   const now = new Date().toISOString();
@@ -239,19 +260,38 @@ export async function attachTimetableDeadlines(): Promise<AttachResult> {
     }
     if (task.dueAt && task.dueAt !== dueAt) result.corrected++;
 
-    await db.update(tasks)
-      .set({
-        dueAt,
-        deadlineSource: "timetable",
-        linkedEventId:  event.id,
-        updatedAt:      now,
-      })
-      .where(eq(tasks.id, task.id));
+    try {
+      await db.update(tasks)
+        .set({
+          dueAt,
+          deadlineSource: "timetable",
+          linkedEventId:  event.id,
+          updatedAt:      now,
+        })
+        .where(eq(tasks.id, task.id));
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      // Same flakiness, on a write this time: still set the actual due
+      // date — the part the user sees — and skip only the provenance
+      // columns. A later run, once the column is readable again, corrects
+      // deadline_source/linked_event_id for this row without any data
+      // loss (dueAt already matches what it would have set anyway).
+      console.error("attachTimetableDeadlines: deadline_source/linked_event_id unwritable, dating without provenance:", e);
+      await db.update(tasks).set({ dueAt, updatedAt: now }).where(eq(tasks.id, task.id));
+    }
     result.matched++;
   }
 
   // ── Reading list: same resolution, but the date is the lecture itself ──
-  const readings = await db.select().from(readingItems);
+  let readings: (typeof readingItems.$inferSelect)[];
+  try {
+    readings = await db.select().from(readingItems);
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    console.error("attachTimetableDeadlines: reading_items columns unreadable, falling back:", e);
+    const safeRows = await db.select(READING_COLUMNS_SAFE).from(readingItems);
+    readings = safeRows.map((r) => ({ ...r, linkedTimetableEventId: null, deadlineConfidence: null }));
+  }
 
   for (const r of readings) {
     const schedule = schedules.get(r.courseCanvasId);
@@ -271,14 +311,22 @@ export async function attachTimetableDeadlines(): Promise<AttachResult> {
     const event = pickEventInWeek(resolved.week, "lecture");
     if (r.lectureDate === event.startAt && r.linkedTimetableEventId === event.id) continue;
 
-    await db.update(readingItems)
-      .set({
-        lectureDate:            event.startAt,
-        linkedTimetableEventId: event.id,
-        deadlineConfidence:     resolved.ref.kind === "iso" ? 0.9 : 0.75,
-        updatedAt:              now,
-      })
-      .where(eq(readingItems.id, r.id));
+    try {
+      await db.update(readingItems)
+        .set({
+          lectureDate:            event.startAt,
+          linkedTimetableEventId: event.id,
+          deadlineConfidence:     resolved.ref.kind === "iso" ? 0.9 : 0.75,
+          updatedAt:              now,
+        })
+        .where(eq(readingItems.id, r.id));
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      console.error("attachTimetableDeadlines: reading_items columns unwritable, dating without the link:", e);
+      await db.update(readingItems)
+        .set({ lectureDate: event.startAt, updatedAt: now })
+        .where(eq(readingItems.id, r.id));
+    }
     result.readingsDated++;
   }
 

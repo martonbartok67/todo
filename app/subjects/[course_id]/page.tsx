@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import { db, dbReady } from "@/lib/db";
 import { courses, tasks, readingItems } from "@/drizzle/schema";
 import { and, asc, eq, isNull, ne } from "drizzle-orm";
-import { getUrgency, type EnrichedTask } from "@/lib/tasks";
+import {
+  getUrgency, withTaskColumnFallback, isMissingColumnError, TASK_COLUMNS_SAFE,
+  type EnrichedTask,
+} from "@/lib/tasks";
+import { READING_COLUMNS_SAFE } from "@/lib/readings";
 import { PageChrome } from "@/components/PageChrome";
 import { SubjectAccordion, type SubjectResources } from "@/components/SubjectAccordion";
 import { ClassifyCourseButton } from "@/components/ClassifyCourseButton";
@@ -31,16 +35,25 @@ export default async function SubjectPage({
   let resources: SubjectResources = { items: [] };
 
   try {
-    const taskRows = await db
-      .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
-      .from(tasks)
-      .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
-      .where(and(
-        eq(tasks.courseCanvasId, course_id),
-        isNull(tasks.completedAt),
-        ne(tasks.classification, "info"),
-      ))
-      .orderBy(asc(tasks.dueAt), asc(tasks.title));
+    const where = and(
+      eq(tasks.courseCanvasId, course_id),
+      isNull(tasks.completedAt),
+      ne(tasks.classification, "info"),
+    );
+    const taskRows = await withTaskColumnFallback(
+      () => db
+        .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
+        .from(tasks)
+        .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
+        .where(where)
+        .orderBy(asc(tasks.dueAt), asc(tasks.title)),
+      () => db
+        .select({ task: TASK_COLUMNS_SAFE, courseName: courses.name, accentColor: courses.accentColor })
+        .from(tasks)
+        .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
+        .where(where)
+        .orderBy(asc(tasks.dueAt), asc(tasks.title)),
+    );
 
     enriched = taskRows
       .map(({ task, courseName, accentColor }) => ({
@@ -63,17 +76,31 @@ export default async function SubjectPage({
   }
 
   try {
-    readingRows = await db.select().from(readingItems)
-      .where(eq(readingItems.courseCanvasId, course_id))
-      .orderBy(asc(readingItems.lectureLabel), asc(readingItems.readingText));
+    const readingWhere = eq(readingItems.courseCanvasId, course_id);
+    const readingOrder = [asc(readingItems.lectureLabel), asc(readingItems.readingText)] as const;
+    try {
+      readingRows = await db.select().from(readingItems).where(readingWhere).orderBy(...readingOrder);
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      const safeRows = await db.select(READING_COLUMNS_SAFE).from(readingItems).where(readingWhere).orderBy(...readingOrder);
+      readingRows = safeRows.map((r) => ({ ...r, linkedTimetableEventId: null, deadlineConfidence: null }));
+    }
   } catch (e) {
     console.error("subject page readings query failed (non-fatal):", e);
   }
 
   try {
-    const resourceRows = await db.select().from(tasks)
-      .where(and(eq(tasks.courseCanvasId, course_id), eq(tasks.classification, "info")))
-      .orderBy(asc(tasks.title));
+    const resourceWhere = and(eq(tasks.courseCanvasId, course_id), eq(tasks.classification, "info"));
+    let resourceRows: { id: number; title: string; classificationReason: string | null; itemType: string | null; url: string | null }[];
+    try {
+      resourceRows = await db.select().from(tasks).where(resourceWhere).orderBy(asc(tasks.title));
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      // Same deadline_source/linked_event_id flakiness as the task query
+      // above — this select doesn't need those columns at all, so drop
+      // straight to the explicit safe column list instead of re-throwing.
+      resourceRows = await db.select(TASK_COLUMNS_SAFE).from(tasks).where(resourceWhere).orderBy(asc(tasks.title));
+    }
     resources = {
       items: resourceRows.map((r) => ({
         id:     r.id,

@@ -460,45 +460,73 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
     // per-row variant took ~60s by itself, blowing the cap before the AI
     // phase ever ran. Drizzle's `.values([...])` + onConflictDoUpdate
     // produces one Turso HTTP call covering the whole course.
-    await db.insert(tasks).values(newTasks).onConflictDoUpdate({
-      target: [tasks.canvasId, tasks.sourceType],
-      set: {
-        title:          sql`excluded.title`,
-        itemType:       sql`excluded.item_type`,
-        // Do NOT blindly take Canvas's due_at here. Module items always
-        // report NULL, so a plain `excluded.due_at` wiped every deadline
-        // that attachTimetableDeadlines() had derived from the timetable —
-        // silently, on the next 6-hourly cron tick. A real Canvas date
-        // still wins.
-        //
-        // The fallback branch deliberately checks `tasks.due_at IS NOT
-        // NULL` rather than `tasks.deadline_source = 'timetable'`: the
-        // deadline_source column was added in the same release as this
-        // CASE, and existing rows have it NULL until the backfill runs (see
-        // app/api/migrate). Keying off deadline_source here would treat
-        // every pre-existing Canvas due date as "unknown provenance" and
-        // discard it on the very first sync after deploy — a correctness
-        // bug independent of, and worse than, the one this fixes. Keying
-        // off "does a due date already exist" is safe regardless of
-        // backfill timing: a date is never dropped, only ever replaced by
-        // a fresher Canvas one.
-        dueAt:          sql`CASE
-                              WHEN excluded.due_at IS NOT NULL THEN excluded.due_at
-                              WHEN tasks.due_at IS NOT NULL THEN tasks.due_at
-                              ELSE NULL
-                            END`,
-        deadlineSource: sql`CASE
-                              WHEN excluded.due_at IS NOT NULL THEN 'canvas'
-                              WHEN tasks.due_at IS NOT NULL THEN COALESCE(tasks.deadline_source, 'canvas')
-                              ELSE NULL
-                            END`,
-        pointsPossible: sql`excluded.points_possible`,
-        url:            sql`excluded.url`,
-        description:    sql`excluded.description`,
-        lastSyncedAt:   sql`excluded.last_synced_at`,
-        updatedAt:      nowIso,
-      },
-    });
+    // Do NOT blindly take Canvas's due_at here. Module items always
+    // report NULL, so a plain `excluded.due_at` wiped every deadline
+    // that attachTimetableDeadlines() had derived from the timetable —
+    // silently, on the next 6-hourly cron tick. A real Canvas date
+    // still wins.
+    //
+    // The fallback branch deliberately checks `tasks.due_at IS NOT
+    // NULL` rather than `tasks.deadline_source = 'timetable'`: the
+    // deadline_source column was added in the same release as this
+    // CASE, and existing rows have it NULL until the backfill runs (see
+    // app/api/migrate). Keying off deadline_source here would treat
+    // every pre-existing Canvas due date as "unknown provenance" and
+    // discard it on the very first sync after deploy — a correctness
+    // bug independent of, and worse than, the one this fixes. Keying
+    // off "does a due date already exist" is safe regardless of
+    // backfill timing: a date is never dropped, only ever replaced by
+    // a fresher Canvas one.
+    const dueAtCase = sql`CASE
+                            WHEN excluded.due_at IS NOT NULL THEN excluded.due_at
+                            WHEN tasks.due_at IS NOT NULL THEN tasks.due_at
+                            ELSE NULL
+                          END`;
+    try {
+      await db.insert(tasks).values(newTasks).onConflictDoUpdate({
+        target: [tasks.canvasId, tasks.sourceType],
+        set: {
+          title:          sql`excluded.title`,
+          itemType:       sql`excluded.item_type`,
+          dueAt:          dueAtCase,
+          deadlineSource: sql`CASE
+                                WHEN excluded.due_at IS NOT NULL THEN 'canvas'
+                                WHEN tasks.due_at IS NOT NULL THEN COALESCE(tasks.deadline_source, 'canvas')
+                                ELSE NULL
+                              END`,
+          pointsPossible: sql`excluded.points_possible`,
+          url:            sql`excluded.url`,
+          description:    sql`excluded.description`,
+          lastSyncedAt:   sql`excluded.last_synced_at`,
+          updatedAt:      nowIso,
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/no such column/i.test(msg)) throw e;
+      // deadline_source has been observed to be intermittently unreadable
+      // in production — see lib/tasks.ts's TASK_COLUMNS_SAFE for why. This
+      // upsert is the whole sync pipeline, so failing it outright means no
+      // tasks sync at all until the column stabilizes; that's worse than
+      // this fallback, which just leaves deadlineSource untouched on
+      // conflict (an existing row keeps whatever provenance it already
+      // has — never wrong, only stale for one cycle) while still updating
+      // everything else, dueAt included.
+      console.error(`[sync] deadline_source unreadable for ${courseId}, upserting without it:`, e);
+      await db.insert(tasks).values(newTasks).onConflictDoUpdate({
+        target: [tasks.canvasId, tasks.sourceType],
+        set: {
+          title:          sql`excluded.title`,
+          itemType:       sql`excluded.item_type`,
+          dueAt:          dueAtCase,
+          pointsPossible: sql`excluded.points_possible`,
+          url:            sql`excluded.url`,
+          description:    sql`excluded.description`,
+          lastSyncedAt:   sql`excluded.last_synced_at`,
+          updatedAt:      nowIso,
+        },
+      });
+    }
   }
 
   const pagesForAI = Array.from(pageMap.values()).filter((p) => (p.body ?? "").length >= 50).length;
