@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:init": "node --env-file=.env scripts/init-db.mjs",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "test:schedule": "node scripts/test-schedule.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.6.0",

@@ -53,6 +53,9 @@ export function assignmentToTask(a: CanvasAssignment, courseCanvasId: string): N
     title:          a.name,
     itemType:       a.submission_types?.[0] ?? null,
     dueAt:          toUtc(a.due_at),
+    // Canvas is the authority for its own due dates; the timetable
+    // derivation must never overwrite one of these.
+    deadlineSource: a.due_at ? "canvas" : null,
     pointsPossible: a.points_possible ?? null,
     url:            a.html_url,
     description:    stripHtml(a.description),
@@ -69,7 +72,10 @@ export function moduleItemToTask(m: CanvasModuleItem, courseCanvasId: string): N
     sourceType:     "module_item",
     title:          m.title,
     itemType:       m.type,
+    // Module items carry no date of their own — this is exactly the set
+    // attachTimetableDeadlines() fills in from the calendar.
     dueAt:          null,
+    deadlineSource: null,
     pointsPossible: null,
     url:            m.html_url ?? m.external_url ?? null,
     description:    null,   // fetched separately in sync for Page type

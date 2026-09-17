@@ -16,9 +16,11 @@ export function BottomTabs({ active }: { active: string }) {
   return (
     <nav
       aria-label="Primary navigation"
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 backdrop-blur-2xl"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40"
       style={{
-        background: "color-mix(in srgb, var(--background) 97%, transparent)",
+        background: "color-mix(in srgb, var(--background) 86%, transparent)",
+        backdropFilter: "blur(22px) saturate(1.6)",
+        WebkitBackdropFilter: "blur(22px) saturate(1.6)",
         borderTop: "1px solid var(--border)",
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
@@ -28,6 +30,7 @@ export function BottomTabs({ active }: { active: string }) {
         style={{
           paddingLeft:  "max(4px, env(safe-area-inset-left))",
           paddingRight: "max(4px, env(safe-area-inset-right))",
+          paddingTop:   "6px",
         }}
       >
         {TABS.map((t) => {
@@ -37,16 +40,35 @@ export function BottomTabs({ active }: { active: string }) {
               <Link
                 href={t.href}
                 aria-current={isActive ? "page" : undefined}
-                className="flex flex-col items-center justify-center gap-[3px] w-full"
+                className="relative flex flex-col items-center justify-center gap-[3px] w-full"
                 style={{
                   color: isActive ? "var(--accent)" : "var(--muted)",
-                  minHeight: "52px",
-                  paddingTop: "8px",
+                  minHeight: "50px",
                   paddingBottom: "8px",
+                  transition: "color var(--dur) var(--ease)",
                 }}
               >
-                <span className="w-[22px] h-[22px]">{t.icon}</span>
-                <span style={{ fontSize: "10px", fontWeight: 700, lineHeight: 1 }}>{t.label}</span>
+                {/* Active pill sits behind the icon rather than under the
+                    label — keeps the target height honest at 44px+. */}
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    top: "-2px",
+                    width: "40px",
+                    height: "26px",
+                    borderRadius: "999px",
+                    background: isActive ? "var(--accent-soft)" : "transparent",
+                    transition: "background var(--dur) var(--ease)",
+                  }}
+                />
+                <span className="relative w-[21px] h-[21px]">{t.icon}</span>
+                <span
+                  className="relative"
+                  style={{ fontSize: "10px", fontWeight: 800, lineHeight: 1, letterSpacing: "0.01em" }}
+                >
+                  {t.label}
+                </span>
               </Link>
             </li>
           );

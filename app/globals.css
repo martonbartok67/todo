@@ -2,47 +2,96 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Design tokens
+
+   One source of truth for colour, elevation, radius and motion. Every
+   component reads these, so retuning the product's look happens here and
+   nowhere else. Light and dark are defined as parallel scales rather than
+   one being a filtered version of the other — dark mode gets its own,
+   slightly desaturated accent so it doesn't glare.
+   ═══════════════════════════════════════════════════════════════════════ */
 
 @layer base {
   :root {
-    --background:      #F2F5F2;
-    --foreground:      #1B241F;
-    --border:          #D9E1DB;
-    --muted:           #69756E;
+    /* Neutrals — a warm, very slightly green-tinted paper */
+    --background:      #F4F6F3;
+    --background-alt:  #EAEFE9;
+    --foreground:      #16201A;
+    --foreground-soft: #3C4A42;
+    --border:          #DEE5DE;
+    --border-strong:   #C9D4CC;
+    --muted:           #66756C;
 
-    --surface-1:       #EDF0ED;
-    --surface-2:       #E5E9E6;
-    --surface-3:       #DDE2DE;
+    --surface-1:       #EDF1EC;
+    --surface-2:       #E4EAE4;
+    --surface-3:       #D9E1DA;
     --surface-card:    #FFFFFF;
 
-    --accent:          #2C6958;
+    /* Brand */
+    --accent:          #226B54;
+    --accent-soft:     #E3F1EA;
+    --accent-strong:   #185040;
     --accent-fg:       #FFFFFF;
+    --accent-gradient: linear-gradient(135deg, #2A7A60 0%, #1C5C49 100%);
 
-    --urgency-critical: #D4574D;
-    --urgency-high:     #E0823A;
-    --urgency-medium:   #C9991A;
-    --urgency-low:      #557AA3;
+    /* Urgency ramp — hue-separated so it reads without relying on saturation */
+    --urgency-critical: #C8453C;
+    --urgency-high:     #C9711F;
+    --urgency-medium:   #A8850E;
+    --urgency-low:      #4A6E99;
+
+    /* Elevation. Two layers each: a tight contact shadow plus a soft spread. */
+    --shadow-sm: 0 1px 2px rgba(18, 32, 25, 0.05),
+                 0 1px 3px rgba(18, 32, 25, 0.04);
+    --shadow-md: 0 1px 2px rgba(18, 32, 25, 0.05),
+                 0 4px 14px -4px rgba(18, 32, 25, 0.10);
+    --shadow-lg: 0 2px 4px rgba(18, 32, 25, 0.05),
+                 0 12px 32px -8px rgba(18, 32, 25, 0.14);
+
+    /* Radius scale */
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 18px;
+    --r-xl: 24px;
+
+    /* Motion */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --dur:  180ms;
   }
 
   .dark {
-    --background:      #111713;
-    --foreground:      #F1F5F1;
-    --border:          #303C34;
-    --muted:           #9DAAA2;
+    --background:      #0E1411;
+    --background-alt:  #131B17;
+    --foreground:      #EDF3EE;
+    --foreground-soft: #C2CFC7;
+    --border:          #253029;
+    --border-strong:   #33423A;
+    --muted:           #8D9C93;
 
-    --surface-1:       #222D26;
-    --surface-2:       #2A3830;
-    --surface-3:       #303F38;
-    --surface-card:    #19211C;
+    --surface-1:       #1A231E;
+    --surface-2:       #222D27;
+    --surface-3:       #2B3831;
+    --surface-card:    #161E1A;
 
-    --accent:          #72C5A5;
-    --accent-fg:       #111713;
+    --accent:          #58C79E;
+    --accent-soft:     #17352B;
+    --accent-strong:   #7BD9B6;
+    --accent-fg:       #0B120F;
+    --accent-gradient: linear-gradient(135deg, #58C79E 0%, #35A882 100%);
 
-    --urgency-critical: #D4574D;
-    --urgency-high:     #E0823A;
-    --urgency-medium:   #C9991A;
-    --urgency-low:      #557AA3;
+    --urgency-critical: #F0776C;
+    --urgency-high:     #E9A051;
+    --urgency-medium:   #D7BA43;
+    --urgency-low:      #7FA6D1;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.36),
+                 0 8px 20px -6px rgba(0, 0, 0, 0.50);
+    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.40),
+                 0 20px 44px -12px rgba(0, 0, 0, 0.62);
   }
 }
 
@@ -51,11 +100,13 @@
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
+  background-color: var(--background);
 }
 
 html, body {
   transition-property: background-color, border-color;
-  transition-duration: 150ms;
+  transition-duration: var(--dur);
   transition-timing-function: ease;
 }
 
@@ -64,61 +115,217 @@ body {
   color: var(--foreground);
   font-family: 'Nunito', ui-rounded, system-ui, sans-serif;
   font-weight: 500;
-  letter-spacing: 0;
+  letter-spacing: -0.005em;
   font-feature-settings: "kern" 1, "liga" 1;
-  /* Left/right safe area for devices with rounded corners / camera cutouts */
+  overscroll-behavior-y: contain;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 
-/* Scrollbar — minimal, theme-aware */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+/* ── Component layer ──────────────────────────────────────────────────
+   Small, composable classes so components stop carrying 20-line inline
+   style objects for what is really one shared visual idea.
+   ─────────────────────────────────────────────────────────────────── */
+
+@layer components {
+  /* The standard content container: a raised, hairline-bordered panel. */
+  .card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
+  .card-raised {
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Small uppercase label above a group of content. */
+  .section-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* Count / status pill. Tint comes from `color` via color-mix. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.45;
+    white-space: nowrap;
+    background: color-mix(in srgb, currentColor 13%, transparent);
+  }
+
+  .chip-outline {
+    background: transparent;
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 38px;
+    padding: 0 16px;
+    border-radius: var(--r-md);
+    border: 1px solid transparent;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform var(--dur) var(--ease),
+                box-shadow var(--dur) var(--ease),
+                background var(--dur) var(--ease),
+                opacity var(--dur) var(--ease);
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn:not(:disabled):active { transform: scale(0.975); }
+
+  .btn-primary {
+    background: var(--accent-gradient);
+    color: var(--accent-fg);
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-primary:not(:disabled):hover { box-shadow: var(--shadow-md); }
+
+  .btn-ghost {
+    background: var(--surface-1);
+    color: var(--foreground-soft);
+    border-color: var(--border);
+  }
+  .btn-ghost:not(:disabled):hover { background: var(--surface-2); }
+
+  .btn-danger {
+    background: transparent;
+    color: var(--urgency-critical);
+    border-color: color-mix(in srgb, var(--urgency-critical) 35%, transparent);
+  }
+
+  /* Form fields */
+  .field {
+    width: 100%;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 11px 13px;
+    color: var(--foreground);
+    outline: none;
+    transition: border-color var(--dur) var(--ease),
+                box-shadow var(--dur) var(--ease);
+  }
+  .field::placeholder { color: var(--muted); }
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  /* Sticky page header with a blurred, fading backdrop. */
+  .page-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    padding: calc(env(safe-area-inset-top) + 18px) 16px 14px;
+    background: linear-gradient(
+      to bottom,
+      var(--background) 55%,
+      color-mix(in srgb, var(--background) 72%, transparent) 100%
+    );
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  }
+
+  .page-title {
+    font-size: 27px;
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--foreground);
+  }
+
+  .page-subtitle {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* Segmented control */
+  .segmented {
+    display: inline-flex;
+    padding: 3px;
+    gap: 2px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .segmented > button {
+    padding: 5px 13px;
+    border: none;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+    transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+  }
+  .segmented > button[data-active="true"] {
+    background: var(--surface-card);
+    color: var(--foreground);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* A row inside a .card list — hairline separated, tappable. */
+  .row {
+    border-bottom: 1px solid var(--border);
+    transition: background var(--dur) var(--ease);
+  }
+  .row:last-child { border-bottom: none; }
+  @media (hover: hover) {
+    .row:hover { background: color-mix(in srgb, var(--surface-1) 55%, transparent); }
+  }
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
 
 /* ── Mobile UX foundations ───────────────────────────────────────────── */
 
-/* Kill the grey tap flash on iOS/Android */
-* {
-  -webkit-tap-highlight-color: transparent;
-}
+* { -webkit-tap-highlight-color: transparent; }
 
-/* Prevent accidental text selection on interactive chrome */
 button, a, [role="button"], nav, header {
   -webkit-user-select: none;
   user-select: none;
 }
-/* But allow selection in actual content */
 p, span.selectable, .task-title, .reading-text {
   -webkit-user-select: text;
   user-select: text;
 }
 
-/* iOS: stop rubber-band overscroll showing the wrong background */
-html {
-  overscroll-behavior-y: none;
-  background-color: var(--background);
-}
-body {
-  overscroll-behavior-y: contain;
-}
-
 /* iOS: inputs below 16px trigger auto-zoom on focus. Never go below. */
-input, select, textarea {
-  font-size: 16px;
-}
+input, select, textarea { font-size: 16px; }
 
-/* Tap feedback — subtle press state on every interactive element */
 button:active, a:active, [role="button"]:active {
-  opacity: 0.6;
+  opacity: 0.65;
   transition: opacity 0.05s;
 }
 
-/* Touch-target helper: expands the hit area without changing layout size.
-   Apply to small icon buttons/links (↗, ✎, chevrons). */
-.tap-target {
-  position: relative;
-}
+/* Expands the hit area to 44px without changing layout size. */
+.tap-target { position: relative; }
 .tap-target::after {
   content: "";
   position: absolute;
@@ -129,12 +336,8 @@ button:active, a:active, [role="button"]:active {
   height: 44px;
 }
 
-/* Momentum scrolling on iOS */
-.scroll-y {
-  -webkit-overflow-scrolling: touch;
-}
+.scroll-y { -webkit-overflow-scrolling: touch; }
 
-/* Respect reduced-motion preference */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -35,30 +35,34 @@ export function PageChrome({
               <Link
                 href="/"
                 className="tap-target"
-                style={{ fontSize: "12px", color: "var(--muted)", padding: "4px 0" }}
+                style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)", padding: "4px 0" }}
               >
                 ← Tasks
               </Link>
-              <span style={{ fontSize: "12px", color: "var(--muted)" }}>/</span>
-              <span style={{ fontSize: "12px", fontWeight: 600 }} className="truncate">
+              <span style={{ fontSize: "12px", color: "var(--border-strong)" }}>/</span>
+              <span style={{ fontSize: "12px", fontWeight: 700 }} className="truncate">
                 {course.name}
               </span>
             </div>
           )}
 
           {/* Desktop theme toggle */}
-          <div className="hidden md:flex justify-end mb-4">
+          <div className="hidden md:flex justify-end mb-3">
             <ThemeToggle />
           </div>
 
-          {/* Content — bottom padding clears the tab bar + home indicator */}
+          {/* Content.
+              The horizontal gutter lives on each page's own header/body
+              (16px) — this wrapper only adds the device safe-area on top of
+              it, so notched phones don't clip content and everything else
+              isn't double-inset. */}
           <div
             className="md:px-0 md:pt-0 md:pb-0"
             style={{
               paddingTop:    course ? "8px" : "0",
               paddingBottom: "calc(72px + env(safe-area-inset-bottom))",
-              paddingLeft:   "max(16px, env(safe-area-inset-left))",
-              paddingRight:  "max(16px, env(safe-area-inset-right))",
+              paddingLeft:   "env(safe-area-inset-left)",
+              paddingRight:  "env(safe-area-inset-right)",
             }}
           >
             {children}

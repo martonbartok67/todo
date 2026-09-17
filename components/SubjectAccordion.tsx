@@ -63,7 +63,7 @@ export function SubjectAccordion({
         ) : (
           <ul className="space-y-1.5 p-3">
             {tasks.map((t) => (
-              <TaskCard key={t.id} task={t} />
+              <TaskCard key={t.id} task={t} hideCourse />
             ))}
           </ul>
         )}

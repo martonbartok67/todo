@@ -1,5 +1,5 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { completeTask, uncompleteTask } from "@/app/actions/tasks";
@@ -8,6 +8,7 @@ import type { SyncLog } from "@/drizzle/schema";
 import { TaskCard } from "./TaskCard";
 import { ClassifyCourseButton } from "./ClassifyCourseButton";
 import { formatDateTime } from "@/lib/format";
+import { courseColor } from "@/lib/colors";
 
 type Props = {
   pending:   EnrichedTask[];
@@ -16,190 +17,163 @@ type Props = {
   lastSync:  SyncLog | null;
 };
 
-const URGENCY_SECTION: Record<UrgencyLevel, { label: string; color: string }> = {
-  critical: { label: "Overdue / Due < 24h", color: "var(--urgency-critical)" },
-  high:     { label: "Due within 48h",      color: "var(--urgency-high)" },
-  medium:   { label: "This week",           color: "var(--urgency-medium)" },
-  low:      { label: "Upcoming",            color: "var(--urgency-low)" },
-  none:     { label: "No due date",         color: "var(--muted)" },
+const URGENCY_SECTION: Record<UrgencyLevel, { label: string; short: string; color: string }> = {
+  critical: { label: "Overdue / due in under 24h", short: "Now",       color: "var(--urgency-critical)" },
+  high:     { label: "Due within 48 hours",        short: "Soon",      color: "var(--urgency-high)" },
+  medium:   { label: "Later this week",            short: "This week", color: "var(--urgency-medium)" },
+  low:      { label: "Upcoming",                   short: "Upcoming",  color: "var(--urgency-low)" },
+  none:     { label: "No due date yet",            short: "Undated",   color: "var(--muted)" },
 };
 
-const COURSE_COLORS: Record<string, string> = {
-  Economics:     "#2C6958",
-  Mathematics:   "#7A4F83",
-  Statistics:    "#286982",
-  Marketing:     "#3D7C6F",
-  Psychology:    "#C9991A",
-  Strategy:      "#D4574D",
-  Biology:       "#6B73AA",
-  Communication: "#557AA3",
-};
-
-function fallbackColor(name: string): string {
-  const colors = ["#2C6958","#7A4F83","#286982","#3D7C6F","#C9991A","#D4574D","#6B73AA","#557AA3"];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % colors.length;
-  return colors[Math.abs(h)];
-}
-
-function courseColor(name: string, accentColor?: string | null): string {
-  if (accentColor) return accentColor;
-  for (const [key, val] of Object.entries(COURSE_COLORS)) {
-    if (name.toLowerCase().includes(key.toLowerCase())) return val;
-  }
-  return fallbackColor(name);
-}
+const URGENCY_ORDER: UrgencyLevel[] = ["critical", "high", "medium", "low", "none"];
 
 type ViewMode = "urgency" | "course";
 
+/** Chevron that rotates to point down when its section is open. */
+function Caret({ open, color }: { open: boolean; color: string }) {
+  return (
+    <svg
+      width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+      style={{
+        transform: open ? "rotate(0deg)" : "rotate(-90deg)",
+        transition: "transform var(--dur) var(--ease)",
+        flexShrink: 0,
+      }}
+    >
+      <path d="M5 9l7 7 7-7" />
+    </svg>
+  );
+}
+
 export default function TaskDashboard({ pending, byCourse, completed, lastSync }: Props) {
-  const [isPending, startTransition] = useTransition();
-  const [view, setView]              = useState<ViewMode>("urgency");
+  const [isPending, startTransition]      = useTransition();
+  const [view, setView]                   = useState<ViewMode>("urgency");
   const [showCompleted, setShowCompleted] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed]         = useState<Set<string>>(new Set());
 
   function toggleGroup(key: string) {
-    setCollapsed(prev => {
+    setCollapsed((prev) => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
 
-  function handleComplete(id: number)   { startTransition(() => { completeTask(id); }); }
-  function handleUncomplete(id: number) { startTransition(() => { uncompleteTask(id); }); }
+  const handleComplete   = (id: number) => startTransition(() => { completeTask(id); });
+  const handleUncomplete = (id: number) => startTransition(() => { uncompleteTask(id); });
 
-  const urgencyOrder: UrgencyLevel[] = ["critical","high","medium","low","none"];
-  const urgencyGroups = urgencyOrder
-    .map((u) => ({ urgency: u, tasks: pending.filter((t) => t.urgency === u) }))
-    .filter((g) => g.tasks.length > 0);
+  const urgencyGroups = useMemo(
+    () => URGENCY_ORDER
+      .map((u) => ({ urgency: u, tasks: pending.filter((t) => t.urgency === u) }))
+      .filter((g) => g.tasks.length > 0),
+    [pending],
+  );
+
+  // Headline numbers. "Undated" is the one the timetable pipeline is meant
+  // to shrink, so it earns a slot next to the urgent count.
+  const dueSoon = useMemo(
+    () => pending.filter((t) => t.urgency === "critical" || t.urgency === "high").length,
+    [pending],
+  );
+  const undated = useMemo(() => pending.filter((t) => !t.dueAt).length, [pending]);
 
   return (
     <>
-      {/* Sticky header */}
-      <header
-        className="sticky top-0 z-30 md:relative md:mb-5"
-        style={{
-          paddingTop: "54px",
-          paddingLeft: "18px",
-          paddingRight: "18px",
-          paddingBottom: "12px",
-          background: "color-mix(in srgb, var(--background) 95%, transparent)",
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-        }}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 style={{ fontSize: "24px", fontWeight: 800, lineHeight: 1.2, color: "var(--foreground)" }}>
-              Tasks
-            </h1>
+      <header className="page-header md:!static md:!backdrop-blur-none md:mb-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="page-title">Tasks</h1>
             {lastSync && (
-              <p style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }} className="tabular-nums">
+              <p className="page-subtitle tabular-nums">
                 Synced {formatDateTime(lastSync.startedAt)} · {lastSync.tasksUpserted} items
               </p>
             )}
           </div>
 
-          {/* Segmented control */}
-          <div
-            className="inline-flex"
-            style={{
-              background: "var(--surface-1)",
-              borderRadius: "12px",
-              padding: "3px",
-            }}
-          >
-            {(["urgency","course"] as ViewMode[]).map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                style={{
-                  padding: "5px 12px",
-                  borderRadius: "9px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  transition: "all 0.15s",
-                  background: view === v ? "var(--foreground)" : "transparent",
-                  color: view === v ? "var(--background)" : "var(--muted)",
-                  border: "none",
-                  cursor: "pointer",
-                }}
-              >
+          <div className="segmented shrink-0">
+            {(["urgency", "course"] as ViewMode[]).map((v) => (
+              <button key={v} data-active={view === v} onClick={() => setView(v)}>
                 {v === "urgency" ? "Priority" : "Subject"}
               </button>
             ))}
           </div>
         </div>
+
+        {/* Stat strip */}
+        {pending.length > 0 && (
+          <div className="flex items-center gap-2" style={{ marginTop: "12px" }}>
+            <Stat value={pending.length} label="open" color="var(--foreground)" />
+            {dueSoon > 0 && (
+              <Stat value={dueSoon} label="due soon" color="var(--urgency-critical)" />
+            )}
+            {undated > 0 && (
+              <Link href="/timetable" className="contents">
+                <Stat value={undated} label="undated" color="var(--muted)" hint="Attach deadlines →" />
+              </Link>
+            )}
+          </div>
+        )}
       </header>
 
-      {/* Scrollable content */}
-      <div style={{ padding: "0 16px", paddingBottom: "88px" }} className="md:!p-0">
+      <div style={{ padding: "0 16px 88px" }} className="md:!p-0">
         {pending.length === 0 && (
-          <div className="text-center py-16" style={{ color: "var(--muted)", fontSize: "14px" }}>
-            No pending tasks.
+          <div className="card" style={{ padding: "40px 20px", textAlign: "center" }}>
+            <p style={{ fontSize: "15px", fontWeight: 800, color: "var(--foreground)" }}>
+              Nothing pending
+            </p>
+            <p style={{ fontSize: "13px", color: "var(--muted)", marginTop: "4px" }}>
+              Everything on your list is done or scheduled.
+            </p>
           </div>
         )}
 
-        {/* Priority view — panels per urgency group */}
+        {/* ── Priority view ── */}
         {view === "urgency" && (
           <AnimatePresence mode="popLayout">
             {urgencyGroups.map(({ urgency, tasks }) => {
-              const uc = URGENCY_SECTION[urgency].color;
+              const uc   = URGENCY_SECTION[urgency].color;
+              const key  = `u:${urgency}`;
+              const open = !collapsed.has(key);
               return (
-                <motion.section key={urgency} layout style={{ marginBottom: "22px" }}>
-                  {/* Section label */}
-                  <div className="flex items-center justify-between" style={{ marginBottom: "6px" }}>
-                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
-                      {URGENCY_SECTION[urgency].label}
-                    </span>
-                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
-                      {tasks.length}
-                    </span>
-                  </div>
-
-                  {/* Panel */}
-                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
-                    {/* Panel header row — click to collapse */}
+                <motion.section key={urgency} layout style={{ marginBottom: "18px" }}>
+                  <div className="card">
                     <button
-                      onClick={() => toggleGroup(`u:${urgency}`)}
+                      onClick={() => toggleGroup(key)}
                       className="flex items-center justify-between w-full"
                       style={{
-                        background: `color-mix(in srgb, ${uc} 14%, transparent)`,
-                        padding: "10px 14px",
+                        background: `color-mix(in srgb, ${uc} 10%, var(--surface-card))`,
+                        borderBottom: open ? `1px solid color-mix(in srgb, ${uc} 22%, transparent)` : "none",
+                        padding: "11px 14px",
                         border: "none",
                         cursor: "pointer",
                       }}
+                      aria-expanded={open}
                     >
-                      <div className="flex items-center gap-2">
-                        <span
-                          style={{
-                            transition: "transform 0.15s",
-                            display: "inline-block",
-                            transform: collapsed.has(`u:${urgency}`) ? "rotate(-90deg)" : "none",
-                            fontSize: "10px", color: uc,
-                          }}
-                        >▾</span>
-                        <span
-                          style={{
-                            width: "7px", height: "7px", borderRadius: "50%",
-                            background: uc, flexShrink: 0,
-                          }}
-                        />
-                        <span style={{ fontSize: "12px", fontWeight: 700, color: uc }}>
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        <Caret open={open} color={uc} />
+                        <span aria-hidden style={{
+                          width: "8px", height: "8px", borderRadius: "50%",
+                          background: uc, flexShrink: 0,
+                          boxShadow: `0 0 0 3px color-mix(in srgb, ${uc} 20%, transparent)`,
+                        }} />
+                        <span className="truncate" style={{
+                          fontSize: "12.5px", fontWeight: 800, color: uc, letterSpacing: "-0.01em",
+                        }}>
                           {URGENCY_SECTION[urgency].label}
                         </span>
-                      </div>
-                      <span style={{ fontSize: "12px", fontWeight: 700, color: uc }}>{tasks.length}</span>
+                      </span>
+                      <span className="chip tabular-nums" style={{ color: uc }}>{tasks.length}</span>
                     </button>
 
                     <AnimatePresence initial={false}>
-                      {!collapsed.has(`u:${urgency}`) && (
+                      {open && (
                         <motion.div
                           initial={{ height: 0 }}
                           animate={{ height: "auto" }}
                           exit={{ height: 0 }}
-                          transition={{ duration: 0.18 }}
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
                           style={{ overflow: "hidden" }}
                         >
                           <ul>
@@ -219,100 +193,109 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
           </AnimatePresence>
         )}
 
-        {/* Subject view */}
+        {/* ── Subject view ── */}
         {view === "course" && (
           <AnimatePresence mode="popLayout">
             {byCourse.map((group) => {
               const accent = courseColor(group.courseName, group.accentColor);
+              const key    = `c:${group.courseCanvasId}`;
+              const open   = !collapsed.has(key);
               return (
-                <motion.section key={group.courseCanvasId} layout style={{ marginBottom: "22px" }}>
-                  {/* Floating label — click to collapse */}
-                  <div className="flex items-center gap-2" style={{ marginBottom: "6px" }}>
-                    <button
-                      onClick={() => toggleGroup(`c:${group.courseCanvasId}`)}
+                <motion.section key={group.courseCanvasId} layout style={{ marginBottom: "18px" }}>
+                  <div className="card">
+                    <div
+                      className="flex items-center gap-2.5"
                       style={{
-                        transition: "transform 0.15s",
-                        display: "inline-block",
-                        transform: collapsed.has(`c:${group.courseCanvasId}`) ? "rotate(-90deg)" : "none",
-                        fontSize: "10px", color: "var(--muted)",
-                        background: "none", border: "none", cursor: "pointer", padding: 0,
+                        background: `color-mix(in srgb, ${accent} 9%, var(--surface-card))`,
+                        borderBottom: open ? `1px solid color-mix(in srgb, ${accent} 20%, transparent)` : "none",
+                        padding: "10px 14px",
                       }}
-                    >▾</button>
-                    <span
-                      style={{ width: "8px", height: "8px", borderRadius: "50%", background: accent, flexShrink: 0 }}
-                    />
-                    <Link
-                      href={`/subjects/${group.courseCanvasId}`}
-                      style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)", flex: 1, minWidth: 0 }}
-                      className="truncate hover:opacity-80 transition-opacity"
                     >
-                      {group.courseName}
-                    </Link>
-                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--muted)" }}>
-                      {group.tasks.length}
-                    </span>
-                    <ClassifyCourseButton
-                      courseId={group.courseCanvasId}
-                      courseName={group.courseName}
-                      variant="inline"
-                    />
-                  </div>
-
-                  {/* Panel */}
-                  <AnimatePresence initial={false}>
-                    {!collapsed.has(`c:${group.courseCanvasId}`) && (
-                      <motion.div
-                        initial={{ height: 0 }}
-                        animate={{ height: "auto" }}
-                        exit={{ height: 0 }}
-                        transition={{ duration: 0.18 }}
-                        style={{ overflow: "hidden" }}
+                      <button
+                        onClick={() => toggleGroup(key)}
+                        aria-expanded={open}
+                        aria-label={open ? "Collapse subject" : "Expand subject"}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}
                       >
-                        <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden" }}>
+                        <Caret open={open} color={accent} />
+                      </button>
+                      <span aria-hidden style={{
+                        width: "8px", height: "8px", borderRadius: "50%",
+                        background: accent, flexShrink: 0,
+                        boxShadow: `0 0 0 3px color-mix(in srgb, ${accent} 20%, transparent)`,
+                      }} />
+                      <Link
+                        href={`/subjects/${group.courseCanvasId}`}
+                        className="truncate hover:opacity-75 transition-opacity"
+                        style={{ fontSize: "12.5px", fontWeight: 800, color: accent, flex: 1, minWidth: 0 }}
+                      >
+                        {group.courseName}
+                      </Link>
+                      <span className="chip tabular-nums" style={{ color: accent }}>{group.tasks.length}</span>
+                      <ClassifyCourseButton
+                        courseId={group.courseCanvasId}
+                        courseName={group.courseName}
+                        variant="inline"
+                      />
+                    </div>
+
+                    <AnimatePresence initial={false}>
+                      {open && (
+                        <motion.div
+                          initial={{ height: 0 }}
+                          animate={{ height: "auto" }}
+                          exit={{ height: 0 }}
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                          style={{ overflow: "hidden" }}
+                        >
                           <ul>
                             <AnimatePresence mode="popLayout">
                               {group.tasks.map((t) => (
-                                <TaskCard key={t.id} task={t} onComplete={handleComplete} disabled={isPending} />
+                                <TaskCard
+                                  key={t.id}
+                                  task={t}
+                                  onComplete={handleComplete}
+                                  disabled={isPending}
+                                  hideCourse
+                                />
                               ))}
                             </AnimatePresence>
                           </ul>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </motion.section>
               );
             })}
           </AnimatePresence>
         )}
 
-        {/* Completed */}
+        {/* ── Completed ── */}
         {completed.length > 0 && (
-          <section style={{ marginTop: "24px" }}>
+          <section style={{ marginTop: "26px" }}>
             <button
               onClick={() => setShowCompleted((v) => !v)}
-              className="flex items-center gap-2 w-full"
+              className="flex items-center gap-2 w-full section-label"
               style={{
-                fontSize: "12px", fontWeight: 700, color: "var(--muted)",
-                marginBottom: "6px", background: "none", border: "none", cursor: "pointer",
-                padding: 0,
+                marginBottom: "8px", background: "none", border: "none",
+                cursor: "pointer", padding: 0,
               }}
+              aria-expanded={showCompleted}
             >
-              <span style={{ transition: "transform 0.15s", display: "inline-block", transform: showCompleted ? "rotate(90deg)" : "none" }}>
-                ▸
-              </span>
-              Completed ({completed.length})
+              <Caret open={showCompleted} color="var(--muted)" />
+              Completed · {completed.length}
             </button>
-            <AnimatePresence>
+            <AnimatePresence initial={false}>
               {showCompleted && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.18 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
                   style={{ overflow: "hidden" }}
                 >
-                  <div style={{ background: "var(--surface-card)", borderRadius: "16px", overflow: "hidden", opacity: 0.55 }}>
+                  <div className="card" style={{ opacity: 0.68 }}>
                     <ul>
                       {completed.map((t) => (
                         <TaskCard key={t.id} task={t} onUncomplete={handleUncomplete} disabled={isPending} />
@@ -326,5 +309,32 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
         )}
       </div>
     </>
+  );
+}
+
+/** One number + caption in the header strip. */
+function Stat({
+  value, label, color, hint,
+}: {
+  value: number; label: string; color: string; hint?: string;
+}) {
+  return (
+    <div
+      title={hint}
+      style={{
+        display: "flex", alignItems: "baseline", gap: "5px",
+        padding: "5px 11px",
+        borderRadius: "999px",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <span className="tabular-nums" style={{ fontSize: "14px", fontWeight: 900, color, lineHeight: 1 }}>
+        {value}
+      </span>
+      <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", lineHeight: 1 }}>
+        {label}
+      </span>
+    </div>
   );
 }
