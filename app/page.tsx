@@ -19,8 +19,9 @@ export default async function Home() {
       getCompletedTasks(),
       getLastSyncStatus(),
     ]);
-  } catch {
+  } catch (e) {
     // DB unavailable — render empty state, don't hang
+    console.error("DEBUG Home() query failed:", e);
   }
 
   return (
