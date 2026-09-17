@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import { tasks, courses, syncLog } from "@/drizzle/schema";
 import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne, notInArray } from "drizzle-orm";
 import type { Task } from "@/drizzle/schema";
@@ -40,6 +40,17 @@ export type CourseGroup = {
 // ── shared row fetch ──────────────────────────────────────────────────────
 
 async function fetchPendingRows() {
+  // These queries select the full `tasks` row, which includes columns
+  // (deadlineSource, linkedEventId) that may have just been added by
+  // lib/db.ts's bootstrap migration. Page reads normally skip dbReady() so
+  // a schema hiccup degrades to an empty list rather than blocking render
+  // — but that assumed bootstrap settles in milliseconds. In production
+  // that assumption held for every column except one, which stayed
+  // unreadable from this query for 15+ minutes after the ALTER TABLE
+  // reported success elsewhere — a Turso-side propagation lag far longer
+  // than "fire and forget" was designed to tolerate. Awaiting it here
+  // trades a small one-time latency hit for the list actually rendering.
+  await dbReady();
   const now = new Date().toISOString();
   return db
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
@@ -133,6 +144,7 @@ export async function getPendingTasksByCourse(): Promise<CourseGroup[]> {
 
 /** Tasks due within 48h (notification bell). */
 export async function getUpcomingDeadlines(): Promise<EnrichedTask[]> {
+  await dbReady(); // see fetchPendingRows() — same full-row `tasks` select
   const now   = new Date().toISOString();
   const in48h = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const rows  = await db
@@ -156,6 +168,7 @@ export async function getUpcomingDeadlines(): Promise<EnrichedTask[]> {
 
 /** Completed tasks, most recent first, capped at 50. */
 export async function getCompletedTasks(): Promise<EnrichedTask[]> {
+  await dbReady(); // see fetchPendingRows() — same full-row `tasks` select
   const rows = await db
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
     .from(tasks)
@@ -190,6 +203,7 @@ export type EnrichedResource = Task & {
  * Sorted: most recently classified first within each course.
  */
 export async function getInfoResources(): Promise<EnrichedResource[]> {
+  await dbReady(); // see fetchPendingRows() — same full-row `tasks` select
   const rows = await db
     .select({ task: tasks, courseName: courses.name, accentColor: courses.accentColor })
     .from(tasks)

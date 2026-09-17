@@ -21,7 +21,7 @@ export default async function Home() {
     ]);
   } catch (e) {
     // DB unavailable — render empty state, don't hang
-    console.error("DEBUG Home() query failed:", e);
+    console.error("tasks page query failed (non-fatal):", e);
   }
 
   return (

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import { courses, tasks, readingItems } from "@/drizzle/schema";
 import { and, asc, eq, isNull, ne } from "drizzle-orm";
 import { getUrgency, type EnrichedTask } from "@/lib/tasks";
@@ -15,6 +15,11 @@ export default async function SubjectPage({
   params: Promise<{ course_id: string }>;
 }) {
   const { course_id } = await params;
+
+  // The queries below select full `tasks`/`reading_items` rows, which
+  // carry columns that may have just been added — see lib/tasks.ts's
+  // fetchPendingRows() for why this awaits dbReady().
+  await dbReady();
 
   const courseRows = await db.select().from(courses)
     .where(eq(courses.canvasId, course_id)).limit(1);
@@ -53,13 +58,17 @@ export default async function SubjectPage({
         if (b.dueAt) return 1;
         return a.title.localeCompare(b.title);
       });
-  } catch {}
+  } catch (e) {
+    console.error("subject page tasks query failed (non-fatal):", e);
+  }
 
   try {
     readingRows = await db.select().from(readingItems)
       .where(eq(readingItems.courseCanvasId, course_id))
       .orderBy(asc(readingItems.lectureLabel), asc(readingItems.readingText));
-  } catch {}
+  } catch (e) {
+    console.error("subject page readings query failed (non-fatal):", e);
+  }
 
   try {
     const resourceRows = await db.select().from(tasks)
@@ -73,7 +82,9 @@ export default async function SubjectPage({
         url:    r.url,
       })),
     };
-  } catch {}
+  } catch (e) {
+    console.error("subject page resources query failed (non-fatal):", e);
+  }
 
   return (
     <PageChrome active="tasks" course={{ id: course.canvasId, name: course.name }}>
