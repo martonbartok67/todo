@@ -58,7 +58,7 @@ const TABLE_DDL: Record<string, string[]> = {
     `CREATE UNIQUE INDEX IF NOT EXISTS push_endpoint_idx ON push_subscriptions (endpoint)`,
   ],
   timetable_events: [
-    `CREATE TABLE IF NOT EXISTS timetable_events (id INTEGER PRIMARY KEY AUTOINCREMENT, canvas_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'canvas', course_canvas_id TEXT, course_name TEXT, title TEXT NOT NULL, description TEXT, location TEXT, start_at TEXT NOT NULL, end_at TEXT, all_day INTEGER NOT NULL DEFAULT 0, event_type TEXT, source_url TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS timetable_events (id INTEGER PRIMARY KEY AUTOINCREMENT, canvas_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'canvas', course_canvas_id TEXT, course_name TEXT, title TEXT NOT NULL, description TEXT, location TEXT, categories TEXT, start_at TEXT NOT NULL, end_at TEXT, all_day INTEGER NOT NULL DEFAULT 0, event_type TEXT, source_url TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS timetable_events_canvas_id_idx ON timetable_events (canvas_id)`,
     `CREATE INDEX IF NOT EXISTS timetable_events_start_at_idx ON timetable_events (start_at)`,
     `CREATE INDEX IF NOT EXISTS timetable_events_course_idx ON timetable_events (course_canvas_id)`,
@@ -89,6 +89,7 @@ const COLUMN_MIGRATIONS: Record<string, Array<{ column: string; ddl: string }>> 
   timetable_events: [
     { column: "source",       ddl: "ALTER TABLE timetable_events ADD COLUMN source TEXT NOT NULL DEFAULT 'canvas'" },
     { column: "source_url",   ddl: "ALTER TABLE timetable_events ADD COLUMN source_url TEXT" },
+    { column: "categories",   ddl: "ALTER TABLE timetable_events ADD COLUMN categories TEXT" },
   ],
   reading_items: [
     { column: "week_number",  ddl: "ALTER TABLE reading_items ADD COLUMN week_number INTEGER" },
@@ -142,20 +143,38 @@ async function runBootstrap(): Promise<void> {
   }
 }
 
+let _bootstrapPromise: Promise<void> | null = null;
+
 export function getDb(): DrizzleDB {
   if (_db) return _db;
   const url   = process.env.TURSO_DATABASE_URL;
   const token = process.env.TURSO_AUTH_TOKEN;
   if (!url || !token) throw new Error(`Missing env vars: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN`);
   _db = drizzle(createClient({ url, authToken: token }), { schema });
-  // Fire-and-forget — NEVER awaited on the render path
-  runBootstrap().catch((e) => console.error("bootstrap error (non-fatal):", e));
+  // Fire-and-forget on the page-render path — see dbReady() for callers
+  // that need the schema to actually be there before they query it.
+  _bootstrapPromise = runBootstrap().catch((e) => {
+    console.error("bootstrap error (non-fatal):", e);
+  });
   return _db;
 }
 
-// dbReady kept for backward compat but no longer awaits bootstrap
+/**
+ * Awaits schema bootstrap before returning the client.
+ *
+ * getDb()'s "never block page render" fire-and-forget is right for pages —
+ * they degrade to an empty state on a stray query error. It is wrong for a
+ * server action that just added new columns (deadline_source,
+ * linked_event_id, …): the action runs from a user click, so a few hundred
+ * ms of latency is invisible, but querying a column ALTER TABLE hasn't
+ * committed yet throws "no such column" and the action fails outright.
+ * Any action reading/writing a column added after the table already
+ * existed in production should await this before its first query.
+ */
 export async function dbReady(): Promise<DrizzleDB> {
-  return getDb();
+  const instance = getDb();
+  if (_bootstrapPromise) await _bootstrapPromise;
+  return instance;
 }
 
 export const db = new Proxy({} as DrizzleDB, {

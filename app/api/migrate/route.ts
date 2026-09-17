@@ -104,6 +104,20 @@ export async function GET(req: NextRequest) {
       results.push("✓ backfilled deadline_source='canvas' for existing due dates");
     } catch (e) { results.push(`! backfill deadline_source: ${e}`); }
 
+    // `categories` — raw iCal CATEGORIES, persisted so a later repair pass
+    // (attachTimetableDeadlines's relinkOrphanedEvents) can use the same
+    // signal ingestion used, without re-fetching the feed.
+    try {
+      const cols = await db.all(sql`SELECT name FROM pragma_table_info('timetable_events')`);
+      const colNames = (cols as { name: string }[]).map(c => c.name);
+      if (!colNames.includes("categories")) {
+        await db.run(sql`ALTER TABLE timetable_events ADD COLUMN categories TEXT`);
+        results.push("✓ added timetable_events.categories");
+      } else {
+        results.push("- timetable_events.categories already exists");
+      }
+    } catch (e) { results.push(`! timetable_events.categories: ${e}`); }
+
     // ── Deadline alignment columns on reading_items ─────────────────────
     for (const [col, ddl] of [
       ["linked_timetable_event_id", "ALTER TABLE reading_items ADD COLUMN linked_timetable_event_id INTEGER"],

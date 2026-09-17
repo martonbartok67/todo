@@ -105,6 +105,12 @@ export const timetableEvents = sqliteTable("timetable_events", {
   title:        text("title").notNull(),
   description:  text("description"),
   location:     text("location"),
+  // Raw iCal CATEGORIES, kept verbatim rather than only consumed at ingest.
+  // MyTimetable sometimes puts the course code only here (e.g. "Course,
+  // BT1205") — persisting it lets a later repair pass re-match an event
+  // whose course couldn't be linked at ingest time, without re-fetching
+  // the feed.
+  categories:   text("categories"),
   startAt:      text("start_at").notNull(),
   endAt:        text("end_at"),
   allDay:       integer("all_day", { mode: "boolean" }).notNull().default(false),

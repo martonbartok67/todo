@@ -54,6 +54,17 @@ function civilDate(d: Date): { y: number; m: number; day: number } {
   return { y, m, day };
 }
 
+/**
+ * "YYYY-MM-DD" of an instant, campus-local. Use this — not
+ * `date.toISOString().slice(0, 10)` — for any "which day is this" grouping
+ * key (e.g. an agenda's day headers). ISO-slicing reads the UTC date, so
+ * for a viewer in Amsterdam it mislabels everything from midnight to 2am
+ * (summer) or 1am (winter) as still being the previous day.
+ */
+export function campusDateKey(d: Date): string {
+  return CIVIL_DATE_FMT.format(d);
+}
+
 export type IsoWeek = { year: number; week: number };
 
 /** ISO-8601 week (and ISO week-year) of an instant, campus-local. */
@@ -268,12 +279,32 @@ export type CourseSchedule = {
 export function buildCourseSchedule(
   courseCanvasId: string,
   events: TimetableEvent[],
+  /**
+   * The instant an ambiguous ISO week number ("wk38") resolves relative
+   * to. Calendar data isn't pruned on delete — a course's stored events
+   * can span more than one academic year — so the same week number can
+   * legitimately occur twice (this September's wk38 and last September's).
+   * "First occurrence wins" silently preferred whichever was chronologically
+   * earliest, which is *always* the stale one. Preferring whichever
+   * occurrence is closest to now is the one rule that stays correct as
+   * the current date moves through the year, without needing to model
+   * "the current academic year" explicitly. Callers should also window
+   * their query to roughly the current academic year (see
+   * app/actions/timetable.ts's loadSchedules) — that's the primary
+   * defense; this is what handles whatever survives the window.
+   */
+  referenceDate: Date = new Date(),
 ): CourseSchedule {
   const weeks = buildTeachingWeeks(events);
+  const refMs = referenceDate.getTime();
   const byIsoWeek = new Map<number, TeachingWeek>();
-  // First occurrence wins: a course spanning a year boundary would
-  // otherwise have week 1 of the new year overwrite nothing meaningful.
-  for (const w of weeks) if (!byIsoWeek.has(w.week)) byIsoWeek.set(w.week, w);
+  for (const w of weeks) {
+    const existing = byIsoWeek.get(w.week);
+    if (!existing) { byIsoWeek.set(w.week, w); continue; }
+    const existingDist = Math.abs(new Date(existing.start).getTime() - refMs);
+    const candidateDist = Math.abs(new Date(w.start).getTime() - refMs);
+    if (candidateDist < existingDist) byIsoWeek.set(w.week, w);
+  }
   return { courseCanvasId, weeks, byIsoWeek };
 }
 

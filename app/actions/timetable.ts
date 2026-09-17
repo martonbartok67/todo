@@ -24,12 +24,12 @@
  * lookup, which is why every task previously came back "couldn't find a
  * matching event".
  */
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import {
   tasks, timetableEvents, userSettings, readingItems, courses,
 } from "@/drizzle/schema";
 import type { TimetableEvent } from "@/drizzle/schema";
-import { eq, isNull, and, or, not } from "drizzle-orm";
+import { eq, isNull, and, or, not, gte, lte } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
   buildCourseIndex, buildCourseSchedule, matchEventToCourse,
@@ -102,6 +102,7 @@ async function relinkOrphanedEvents(): Promise<number> {
       title:       e.title,
       description: e.description,
       location:    e.location,
+      categories:  e.categories,
     });
     if (!hit) continue;
     await db.update(timetableEvents)
@@ -112,10 +113,39 @@ async function relinkOrphanedEvents(): Promise<number> {
   return relinked;
 }
 
+/**
+ * Calendar rows are never deleted on re-sync — an old iCal feed's events
+ * just sit there — so a course's full history can span more than one
+ * academic year by the time this runs. Left unbounded, "Module 1" could
+ * resolve against a September two years ago instead of this one, because
+ * `weeks[0]` is whichever teaching week is chronologically first across
+ * *all* stored events, not the first of the current year.
+ *
+ * A window centered on today approximates "the current academic year"
+ * without having to model term boundaries explicitly: 150 days back covers
+ * a fall-semester course still being referenced in exam season; 270 days
+ * forward covers a task referencing next term before it's synced. The
+ * empty summer gap between academic years (no lectures at all, not just
+ * the exam-fortnight gap `buildTeachingWeeks` already drops) keeps a
+ * window this wide from usually straddling two different years' weeks —
+ * and `buildCourseSchedule`'s closest-to-now tie-break is the fallback for
+ * the cases where it still does.
+ */
+const SCHEDULE_WINDOW_BACK_DAYS    = 150;
+const SCHEDULE_WINDOW_FORWARD_DAYS = 270;
+
 /** One CourseSchedule per course that has any calendar events. */
 async function loadSchedules(): Promise<Map<string, CourseSchedule>> {
+  const now = Date.now();
+  const windowStart = new Date(now - SCHEDULE_WINDOW_BACK_DAYS    * 86_400_000).toISOString();
+  const windowEnd    = new Date(now + SCHEDULE_WINDOW_FORWARD_DAYS * 86_400_000).toISOString();
+
   const all = await db.select().from(timetableEvents)
-    .where(not(isNull(timetableEvents.courseCanvasId)));
+    .where(and(
+      not(isNull(timetableEvents.courseCanvasId)),
+      gte(timetableEvents.startAt, windowStart),
+      lte(timetableEvents.startAt, windowEnd),
+    ));
 
   const byCourse = new Map<string, TimetableEvent[]>();
   for (const e of all) {
@@ -135,6 +165,11 @@ async function loadSchedules(): Promise<Map<string, CourseSchedule>> {
 // ── Main action ────────────────────────────────────────────────────────────
 
 export async function attachTimetableDeadlines(): Promise<AttachResult> {
+  // Triggered by a user click, not a page render — safe to wait a few
+  // hundred ms for the deadline_source / linked_event_id columns to exist
+  // rather than throwing "no such column" on a freshly deployed database.
+  await dbReady();
+
   const result: AttachResult = {
     considered: 0, matched: 0, corrected: 0,
     noWeekRef: 0, noCourseEvents: 0, noEventForWeek: 0,

@@ -8,7 +8,7 @@ import {
 import type { TimetableEvent } from "@/drizzle/schema";
 import { formatDay, formatTime } from "@/lib/format";
 import { courseColor } from "@/lib/colors";
-import { eventKind, type EventKind } from "@/lib/schedule";
+import { eventKind, campusDateKey, type EventKind } from "@/lib/schedule";
 
 const KIND_LABEL: Record<EventKind, string | null> = {
   lecture:  "Lecture",
@@ -20,7 +20,11 @@ const KIND_LABEL: Record<EventKind, string | null> = {
 function groupByDay(events: TimetableEvent[]): [string, TimetableEvent[]][] {
   const out = new Map<string, TimetableEvent[]>();
   for (const e of events) {
-    const key = e.startAt.slice(0, 10);
+    // campusDateKey, not `startAt.slice(0, 10)`: startAt is stored as a UTC
+    // instant, and slicing it reads the UTC calendar date. A 00:30
+    // Amsterdam lecture (22:30Z the day before) would then be filed under
+    // yesterday's heading.
+    const key = campusDateKey(new Date(e.startAt));
     const list = out.get(key);
     if (list) list.push(e);
     else out.set(key, [e]);
@@ -35,7 +39,7 @@ function durationLabel(startAt: string, endAt: string | null): string | null {
   if (mins < 60) return `${mins}m`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  return m > 0 ? `${h}h${m}` : `${h}h`;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 /** Human summary of an attach run — says what happened *and* what didn't. */
@@ -76,7 +80,7 @@ export default function TimetableDashboard({
   const [showFeed, setShowFeed]        = useState(!icalUrl);
 
   const byDay   = useMemo(() => groupByDay(events), [events]);
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = campusDateKey(new Date());
 
   function handleAttach() {
     startAttach(async () => {

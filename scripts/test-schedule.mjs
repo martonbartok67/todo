@@ -104,6 +104,20 @@ eq('"Week 3" reads as ordinal',        resolve("Week 3 material"),       { week:
 eq("module past the end → no match",   resolve("Module 20 bonus"),       null);
 eq("no week reference → no match",     resolve("Course introduction"),   null);
 
+// ── Year-boundary ambiguity: same ISO week, two academic years ────────
+// Calendar rows are never deleted on re-sync, so a course's stored events
+// can span more than one September. "First occurrence wins" always picked
+// the stale year; resolution should prefer whichever occurrence is closest
+// to "now".
+{
+  const thisYearWk38 = ev(new Date(Date.UTC(2026, 8, 14, 9, 0, 0)).toISOString(), "BT1201 Lecture (wk38)");
+  const lastYearWk38 = ev(new Date(Date.UTC(2025, 8, 15, 9, 0, 0)).toISOString(), "BT1201 Lecture (wk38)");
+  const spanning = S.buildCourseSchedule("57918", [lastYearWk38, thisYearWk38], new Date("2026-09-17T12:00:00Z"));
+  const nearest  = S.resolveWeekRef(spanning, S.extractWeekRefs("(wk38)"));
+  eq("ambiguous wk38 resolves to the occurrence nearest today",
+     nearest?.week.start, thisYearWk38.startAt);
+}
+
 // ── Wall-clock → instant, across the DST boundary ─────────────────────
 eq("09:00 Amsterdam in summer is 07:00Z", S.zonedWallTimeToUtc(2026, 9, 17, 9, 0, 0).toISOString(), "2026-09-17T07:00:00.000Z");
 eq("09:00 Amsterdam in winter is 08:00Z", S.zonedWallTimeToUtc(2026, 12, 3, 9, 0, 0).toISOString(), "2026-12-03T08:00:00.000Z");

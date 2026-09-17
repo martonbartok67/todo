@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { db, dbReady } from "@/lib/db";
 import { courses, tasks, syncLog, readingItems, timetableEvents, userSettings } from "@/drizzle/schema";
 import { fetchAllPages } from "./client";
 import { assignmentToTask, moduleItemToTask, type CanvasAssignment, type CanvasModuleItem } from "./transform";
@@ -179,6 +179,11 @@ export async function runSync(): Promise<SyncResult> {
  * AI invocations without re-querying Turso.
  */
 export async function runTaskSync(): Promise<TaskSyncResult> {
+  // The upsert below leans on tasks.deadline_source, which may have just
+  // been added by lib/db.ts's bootstrap migration — wait for it rather
+  // than racing an ALTER TABLE on a freshly deployed database.
+  await dbReady();
+
   const startedAt       = Date.now();
   let coursesProcessed  = 0;
   let tasksUpserted     = 0;
@@ -464,15 +469,27 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
         // report NULL, so a plain `excluded.due_at` wiped every deadline
         // that attachTimetableDeadlines() had derived from the timetable —
         // silently, on the next 6-hourly cron tick. A real Canvas date
-        // still wins; otherwise a timetable-derived date is preserved.
+        // still wins.
+        //
+        // The fallback branch deliberately checks `tasks.due_at IS NOT
+        // NULL` rather than `tasks.deadline_source = 'timetable'`: the
+        // deadline_source column was added in the same release as this
+        // CASE, and existing rows have it NULL until the backfill runs (see
+        // app/api/migrate). Keying off deadline_source here would treat
+        // every pre-existing Canvas due date as "unknown provenance" and
+        // discard it on the very first sync after deploy — a correctness
+        // bug independent of, and worse than, the one this fixes. Keying
+        // off "does a due date already exist" is safe regardless of
+        // backfill timing: a date is never dropped, only ever replaced by
+        // a fresher Canvas one.
         dueAt:          sql`CASE
                               WHEN excluded.due_at IS NOT NULL THEN excluded.due_at
-                              WHEN tasks.deadline_source = 'timetable' THEN tasks.due_at
+                              WHEN tasks.due_at IS NOT NULL THEN tasks.due_at
                               ELSE NULL
                             END`,
         deadlineSource: sql`CASE
                               WHEN excluded.due_at IS NOT NULL THEN 'canvas'
-                              WHEN tasks.deadline_source = 'timetable' THEN 'timetable'
+                              WHEN tasks.due_at IS NOT NULL THEN COALESCE(tasks.deadline_source, 'canvas')
                               ELSE NULL
                             END`,
         pointsPossible: sql`excluded.points_possible`,
@@ -733,6 +750,9 @@ export type IcalSyncResult = {
 };
 
 export async function runIcalSync(): Promise<IcalSyncResult> {
+  // timetable_events.categories may be a column the bootstrap just added.
+  await dbReady();
+
   const startedAt = Date.now();
   const windowStart = new Date();
   // iCal feeds usually cover a full year; the user may subscribe to a
@@ -810,6 +830,7 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
         title:          e.summary,
         description:    e.description ?? null,
         location:       e.location ?? null,
+        categories:     e.categories ?? null,
         startAt:        e.start.toISOString(),
         endAt:          e.end?.toISOString() ?? null,
         allDay:         e.allDay,
@@ -826,6 +847,7 @@ export async function runIcalSync(): Promise<IcalSyncResult> {
           title:          e.summary,
           description:    e.description ?? null,
           location:       e.location ?? null,
+          categories:     e.categories ?? null,
           startAt:        e.start.toISOString(),
           endAt:          e.end?.toISOString() ?? null,
           allDay:         e.allDay,

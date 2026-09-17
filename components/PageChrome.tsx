@@ -52,17 +52,17 @@ export function PageChrome({
           </div>
 
           {/* Content.
-              The horizontal gutter lives on each page's own header/body
-              (16px) — this wrapper only adds the device safe-area on top of
-              it, so notched phones don't clip content and everything else
-              isn't double-inset. */}
+              The horizontal gutter is each page's own 16px header/body
+              padding, and the device's left/right safe-area is already
+              applied once, globally, on `body` (app/globals.css) — adding
+              it again here would double-inset on a notched phone in
+              landscape. Only the bottom inset belongs on this wrapper: it
+              clears the fixed tab bar, which `body` doesn't account for. */}
           <div
             className="md:px-0 md:pt-0 md:pb-0"
             style={{
               paddingTop:    course ? "8px" : "0",
               paddingBottom: "calc(72px + env(safe-area-inset-bottom))",
-              paddingLeft:   "env(safe-area-inset-left)",
-              paddingRight:  "env(safe-area-inset-right)",
             }}
           >
             {children}
