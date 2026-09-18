@@ -22,6 +22,14 @@ export type CanvasModuleItem = {
   external_url: string | null;
   page_url?: string | null;
   completion_requirement?: { type: string; completed: boolean };
+  // Present when this module item is really a pointer at another Canvas
+  // object — an "Assignment"-type item's content_id is the id of the
+  // Assignment it links to, which /courses/:id/assignments *also*
+  // returns in full. Used to skip ingesting the module item as a second,
+  // poorer-quality task row for the same piece of work (see
+  // syncCourseTasks's `assignmentContentIds` filter).
+  content_id?:   number | null;
+  content_type?: string | null;
 };
 
 function stripHtml(html: string | null): string | null {

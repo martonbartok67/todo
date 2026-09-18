@@ -135,6 +135,39 @@ export async function GET(req: NextRequest) {
       } catch (e) { results.push(`! reading_items.${col}: ${e}`); }
     }
 
+    // ── Remove duplicate module_item rows created before the sync fix ────
+    // Canvas represents a graded quiz/assignment twice — once from
+    // /assignments (real due date, points, description) and once as a
+    // module item that just points at that assignment. Every sync before
+    // this fix ingested both, so this deletes the poorer-quality
+    // module_item copy for any pair that shares a course + exact title
+    // with an assignment row. Idempotent: a course with no such pairs
+    // (or already cleaned up) reports 0. Completion state is preserved —
+    // if the module_item copy was marked done and the assignment copy
+    // wasn't, that's copied over before the module_item row is dropped.
+    try {
+      const dupes = await db.all(sql`
+        SELECT m.id AS drop_id, a.id AS keep_id,
+               m.completed_at AS drop_completed, a.completed_at AS keep_completed
+        FROM tasks m
+        JOIN tasks a
+          ON a.course_canvas_id = m.course_canvas_id
+         AND a.title = m.title
+         AND a.source_type = 'assignment'
+        WHERE m.source_type = 'module_item'
+      `) as { drop_id: number; keep_id: number; drop_completed: string | null; keep_completed: string | null }[];
+
+      let migratedCompletion = 0;
+      for (const d of dupes) {
+        if (d.drop_completed && !d.keep_completed) {
+          await db.run(sql`UPDATE tasks SET completed_at = ${d.drop_completed} WHERE id = ${d.keep_id}`);
+          migratedCompletion++;
+        }
+        await db.run(sql`DELETE FROM tasks WHERE id = ${d.drop_id}`);
+      }
+      results.push(`✓ removed ${dupes.length} duplicate module_item task row(s) (${migratedCompletion} had completion state carried over)`);
+    } catch (e) { results.push(`! duplicate task cleanup: ${e}`); }
+
     // Report current state
     const tables = await db.all(sql`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`);
     const indexes = await db.all(sql`SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='reading_items'`);

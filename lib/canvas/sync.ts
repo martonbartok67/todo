@@ -421,7 +421,22 @@ async function syncCourseTasks(courseId: string, courseName: string): Promise<{
     }),
   ]);
 
-  const moduleItems: CanvasModuleItem[] = modules.flatMap((m) => m.items ?? []);
+  const allModuleItems: CanvasModuleItem[] = modules.flatMap((m) => m.items ?? []);
+
+  // Canvas surfaces a graded quiz/assignment twice: once from
+  // /assignments (with the real due date, points, description) and once
+  // as a module item of type "Assignment"/"Quiz" whose content_id points
+  // at that same assignment. Ingesting both gave every graded item a
+  // duplicate row — same title, same course, one with real data and one
+  // blank — visible on the Tasks page as two "Remedial Quiz Module 9"
+  // entries. Drop the module-item copy whenever it points at an
+  // assignment we're already ingesting directly; the assignment row is
+  // strictly richer, so nothing is lost.
+  const assignmentIds = new Set(assignments.map((a) => String(a.id)));
+  const moduleItems = allModuleItems.filter((m) => {
+    if (m.content_type !== "Assignment") return true;
+    return m.content_id == null || !assignmentIds.has(String(m.content_id));
+  });
   const pageItems = moduleItems.filter((m) => m.type === "Page" && m.page_url);
 
   // Conditionally fetch page bodies. The body is only needed to populate
