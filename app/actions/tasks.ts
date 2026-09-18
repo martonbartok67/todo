@@ -5,24 +5,40 @@
  */
 import { db } from "@/lib/db";
 import { tasks } from "@/drizzle/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-/** Mark a task complete (idempotent). */
-export async function completeTask(taskId: number) {
+/**
+ * Mark a task complete (idempotent).
+ *
+ * `alsoIds` are the unit satellites this row absorbed (see
+ * lib/unit-rollup.ts). They have to travel with the tick, not just for
+ * tidiness: the roll-up only hides a clip while its unit row is in the
+ * pending list, so completing the unit alone would drop the unit out of
+ * that list and pop all of its clips back in as separate tasks.
+ */
+export async function completeTask(taskId: number, alsoIds: number[] = []) {
+  const ids = [taskId, ...alsoIds.filter((id) => id !== taskId)];
   await db
     .update(tasks)
     .set({ completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
-    .where(eq(tasks.id, taskId));
+    .where(ids.length === 1 ? eq(tasks.id, taskId) : inArray(tasks.id, ids));
   revalidatePath("/");
 }
 
-/** Undo completion. */
-export async function uncompleteTask(taskId: number) {
+/**
+ * Undo completion. `alsoIds` mirrors completeTask — note that a row
+ * un-ticked from the completed list carries none, because the roll-up
+ * runs over pending rows only: its satellites stay complete, which is
+ * harmless (they simply stay out of the list) and reversible one by one
+ * from the completed section.
+ */
+export async function uncompleteTask(taskId: number, alsoIds: number[] = []) {
+  const ids = [taskId, ...alsoIds.filter((id) => id !== taskId)];
   await db
     .update(tasks)
     .set({ completedAt: null, updatedAt: new Date().toISOString() })
-    .where(eq(tasks.id, taskId));
+    .where(ids.length === 1 ? eq(tasks.id, taskId) : inArray(tasks.id, ids));
   revalidatePath("/");
 }
 

@@ -29,8 +29,9 @@ const ITEM_TYPE_LABEL: Record<string, string> = {
 
 type TaskCardProps = {
   task:          EnrichedTask;
-  onComplete?:   (id: number) => void;
-  onUncomplete?: (id: number) => void;
+  /** `alsoIds` carries the rolled-up satellites, so they complete together. */
+  onComplete?:   (id: number, alsoIds?: number[]) => void;
+  onUncomplete?: (id: number, alsoIds?: number[]) => void;
   disabled?:     boolean;
   /** Suppress the course name — redundant inside a per-subject group. */
   hideCourse?:   boolean;
@@ -50,7 +51,12 @@ export const TaskCard = forwardRef<HTMLLIElement, TaskCardProps>(function TaskCa
   const [isPending, startTransition] = useTransition();
 
   const done         = !!task.completedAt;
-  const hasContent   = !!task.description;
+  // Clips/slides/recordings this unit absorbed (lib/unit-rollup.ts). They
+  // are not rows of their own any more, so the card is the only place
+  // they can still be seen, opened and ticked off individually.
+  const rolledUp     = task.rolledUp ?? [];
+  const rolledUpIds  = rolledUp.map((c) => c.id);
+  const hasContent   = !!task.description || rolledUp.length > 0;
   const typeLabel    = task.itemType ? (ITEM_TYPE_LABEL[task.itemType] ?? null) : null;
   const urgencyColor = URGENCY_COLOR[done ? "none" : task.urgency];
   const accent       = courseColor(task.courseName);
@@ -61,9 +67,14 @@ export const TaskCard = forwardRef<HTMLLIElement, TaskCardProps>(function TaskCa
 
   const handleToggle = () => {
     startTransition(() => {
-      if (done) (onUncomplete ?? uncompleteTask)(task.id);
-      else      (onComplete   ?? completeTask)(task.id);
+      if (done) (onUncomplete ?? uncompleteTask)(task.id, rolledUpIds);
+      else      (onComplete   ?? completeTask)(task.id, rolledUpIds);
     });
+  };
+
+  /** Tick off one absorbed satellite without touching its unit. */
+  const handleChildToggle = (childId: number) => {
+    startTransition(() => { completeTask(childId); });
   };
 
   return (
@@ -170,6 +181,19 @@ export const TaskCard = forwardRef<HTMLLIElement, TaskCardProps>(function TaskCa
                 {task.pointsPossible} pt
               </span>
             )}
+            {rolledUp.length > 0 && (
+              <span
+                className="tabular-nums"
+                title={`Includes ${rolledUp.length} item${rolledUp.length === 1 ? "" : "s"} for this unit — tap to list them`}
+                style={{
+                  fontSize: "10.5px", fontWeight: 700, color: accent,
+                  background: `color-mix(in srgb, ${accent} 14%, transparent)`,
+                  borderRadius: "999px", padding: "1px 7px", lineHeight: 1.5,
+                }}
+              >
+                +{rolledUp.length}
+              </span>
+            )}
 
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
               {task.dueAt && !done && (
@@ -230,12 +254,79 @@ export const TaskCard = forwardRef<HTMLLIElement, TaskCardProps>(function TaskCa
               margin: "0 14px 14px 16px", padding: "11px 13px",
               background: "var(--surface-1)", borderRadius: "var(--r-md)",
             }}>
-              <p style={{
-                fontSize: "12.5px", color: "var(--foreground-soft)",
-                lineHeight: 1.65, whiteSpace: "pre-wrap",
-              }}>
-                {task.description}
-              </p>
+              {task.description && (
+                <p style={{
+                  fontSize: "12.5px", color: "var(--foreground-soft)",
+                  lineHeight: 1.65, whiteSpace: "pre-wrap",
+                }}>
+                  {task.description}
+                </p>
+              )}
+
+              {rolledUp.length > 0 && (
+                <div style={{ marginTop: task.description ? "11px" : 0 }}>
+                  <p className="section-label" style={{
+                    fontSize: "10.5px", fontWeight: 700, color: "var(--muted)",
+                    letterSpacing: "0.04em", textTransform: "uppercase",
+                    marginBottom: "6px",
+                  }}>
+                    Part of this unit
+                  </p>
+                  <ul style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                    {rolledUp.map((child) => (
+                      <li
+                        key={child.id}
+                        className="flex items-center gap-2"
+                        style={{ padding: "3px 0" }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          disabled={disabled || isPending}
+                          onClick={() => handleChildToggle(child.id)}
+                          className="tap-target"
+                          style={{
+                            flexShrink: 0, width: "14px", height: "14px",
+                            borderRadius: "50%", border: "1.8px solid var(--muted)",
+                            background: "transparent",
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            opacity: disabled ? 0.4 : 0.7,
+                          }}
+                          aria-label={`Mark "${child.title}" complete`}
+                        />
+                        <span
+                          className="truncate"
+                          style={{ fontSize: "12px", color: "var(--foreground-soft)", flex: 1, minWidth: 0 }}
+                        >
+                          {child.title}
+                        </span>
+                        {child.pointsPossible != null && (
+                          <span className="tabular-nums shrink-0" style={{
+                            fontSize: "10.5px", color: "var(--muted)", opacity: 0.8,
+                          }}>
+                            {child.pointsPossible} pt
+                          </span>
+                        )}
+                        {child.url && (
+                          <a
+                            href={child.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="tap-target hover:opacity-70 transition-opacity shrink-0"
+                            style={{ color: "var(--muted)", padding: "2px", lineHeight: 0 }}
+                            aria-label={`Open "${child.title}" in Canvas`}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M14 4h6v6M20 4l-8.5 8.5" />
+                              <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+                            </svg>
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </motion.div>
         )}

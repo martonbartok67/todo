@@ -6,6 +6,7 @@ import {
   getUrgency, withTaskColumnFallback, isMissingColumnError, TASK_COLUMNS_SAFE,
   type EnrichedTask,
 } from "@/lib/tasks";
+import { rollUpUnits } from "@/lib/unit-rollup";
 import { READING_COLUMNS_SAFE } from "@/lib/readings";
 import { PageChrome } from "@/components/PageChrome";
 import { SubjectAccordion, type SubjectResources } from "@/components/SubjectAccordion";
@@ -55,13 +56,16 @@ export default async function SubjectPage({
         .orderBy(asc(tasks.dueAt), asc(tasks.title)),
     );
 
-    enriched = taskRows
-      .map(({ task, courseName, accentColor }) => ({
+    // Same unit roll-up as the main Tasks list (lib/unit-rollup.ts), so a
+    // subject page doesn't show the clips a unit already covers.
+    enriched = rollUpUnits(
+      taskRows.map(({ task, courseName, accentColor }) => ({
         ...task,
-        urgency:     getUrgency(task.dueAt),
         courseName:  courseName ?? course.name,
         accentColor: accentColor ?? course.accentColor ?? null,
-      }))
+      })),
+    )
+      .map((task) => ({ ...task, urgency: getUrgency(task.dueAt) }))
       .sort((a, b) => {
         const order = { critical: 0, high: 1, medium: 2, low: 3, none: 4 } as const;
         const u = order[a.urgency] - order[b.urgency];

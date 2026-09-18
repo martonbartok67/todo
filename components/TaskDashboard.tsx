@@ -61,8 +61,12 @@ export default function TaskDashboard({ pending, byCourse, completed, lastSync }
     });
   }
 
-  const handleComplete   = (id: number) => startTransition(() => { completeTask(id); });
-  const handleUncomplete = (id: number) => startTransition(() => { uncompleteTask(id); });
+  // `alsoIds` are the unit satellites a card rolled up — they complete
+  // with it (see app/actions/tasks.ts for why that is load-bearing).
+  const handleComplete   = (id: number, alsoIds?: number[]) =>
+    startTransition(() => { completeTask(id, alsoIds ?? []); });
+  const handleUncomplete = (id: number, alsoIds?: number[]) =>
+    startTransition(() => { uncompleteTask(id, alsoIds ?? []); });
 
   const urgencyGroups = useMemo(
     () => URGENCY_ORDER

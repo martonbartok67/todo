@@ -2,6 +2,7 @@ import { db, dbReady } from "@/lib/db";
 import { tasks, courses, syncLog } from "@/drizzle/schema";
 import { eq, isNull, isNotNull, desc, lte, and, or, gt, ne, notInArray } from "drizzle-orm";
 import type { Task } from "@/drizzle/schema";
+import { rollUpUnits, type RolledUpChild } from "@/lib/unit-rollup";
 
 
 // Courses excluded from all views — not real coursework
@@ -100,6 +101,14 @@ export type EnrichedTask = Task & {
   urgency:     UrgencyLevel;
   courseName:  string;
   accentColor: string | null;
+  /**
+   * The unit satellites (clips, slides, recordings) this row absorbed —
+   * see lib/unit-rollup.ts. Empty for every row that absorbed nothing,
+   * which is almost all of them. The UI shows them inside this card
+   * instead of as list rows of their own, and completing this row
+   * completes them with it.
+   */
+  rolledUp:    RolledUpChild[];
 };
 
 export type CourseGroup = {
@@ -139,14 +148,19 @@ async function fetchPendingRows() {
 }
 
 function enrich(rows: Awaited<ReturnType<typeof fetchPendingRows>>): EnrichedTask[] {
-  return rows
+  const kept = rows
     .filter(({ task }) => !isNonTask(task.title, task.itemType))
     .map(({ task, courseName, accentColor }) => ({
       ...task,
-      urgency:     getUrgency(task.dueAt),
       courseName:  courseName ?? "Unknown Course",
       accentColor: accentColor ?? null,
-    }))
+    }));
+
+  // Fold each unit's clips/slides into the unit row before urgency is
+  // computed: a unit that inherits a satellite's date has to be sorted
+  // and coloured by that date, not by the "undated" it arrived with.
+  return rollUpUnits(kept)
+    .map((task) => ({ ...task, urgency: getUrgency(task.dueAt) }))
     .sort((a, b) => {
       const u = URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency];
       if (u !== 0) return u;
@@ -235,12 +249,17 @@ export async function getUpcomingDeadlines(): Promise<EnrichedTask[]> {
       .leftJoin(courses, eq(tasks.courseCanvasId, courses.canvasId))
       .where(where),
   );
-  return rows.map(({ task, courseName, accentColor }) => ({
-    ...task,
-    urgency:     getUrgency(task.dueAt),
-    courseName:  courseName ?? "Unknown Course",
-    accentColor: accentColor ?? null,
-  }));
+  // Roll up inside the window too, so one lecture's unit page plus its
+  // four clips is one "due soon" push instead of five. A satellite whose
+  // unit falls outside the 48h window has no parent here and so still
+  // notifies on its own — which is what you'd want in that case.
+  return rollUpUnits(
+    rows.map(({ task, courseName, accentColor }) => ({
+      ...task,
+      courseName:  courseName ?? "Unknown Course",
+      accentColor: accentColor ?? null,
+    })),
+  ).map((task) => ({ ...task, urgency: getUrgency(task.dueAt) }));
 }
 
 /** Completed tasks, most recent first, capped at 50. */
@@ -268,6 +287,10 @@ export async function getCompletedTasks(): Promise<EnrichedTask[]> {
     urgency:     getUrgency(task.dueAt),
     courseName:  courseName ?? "Unknown Course",
     accentColor: accentColor ?? null,
+    // Not rolled up: these lists are date-windowed / completed-only, so
+    // a unit and its satellites need not both be present for the fold to
+    // be meaningful. Each row stands on its own here.
+    rolledUp:    [],
   }));
 }
 
