@@ -117,48 +117,6 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   const [hasSubscription, setHasSubscription] = useState<boolean | null>(null);
   const [permission, setPermission]           = useState<NotificationPermission | null>(null);
   const [isSubscribing, setSubscribing]       = useState(false);
-  const [diag, setDiag]                       = useState<string>("");
-
-  // Temporary diagnostic — every plausible cause of a stuck "Blocked"
-  // state (stale origin permission, device restriction profile, Screen
-  // Time) has been ruled out on the reporting device, so this reads the
-  // raw browser APIs directly instead of guessing further. Remove once
-  // the iOS push issue is resolved.
-  async function runDiagnostics() {
-    const lines: string[] = [];
-    lines.push(`Notification in window: ${"Notification" in window}`);
-    lines.push(`Notification.permission: ${typeof Notification !== "undefined" ? Notification.permission : "n/a"}`);
-    lines.push(`serviceWorker in navigator: ${"serviceWorker" in navigator}`);
-    lines.push(`PushManager in window: ${"PushManager" in window}`);
-    lines.push(`navigator.standalone: ${(navigator as unknown as { standalone?: boolean }).standalone}`);
-    lines.push(`display-mode standalone: ${window.matchMedia("(display-mode: standalone)").matches}`);
-    lines.push(`userAgent: ${navigator.userAgent}`);
-    try {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      lines.push(`SW registrations: ${regs.length}`);
-      regs.forEach((r, i) => lines.push(`  [${i}] scope=${r.scope} active=${!!r.active} waiting=${!!r.waiting} installing=${!!r.installing}`));
-    } catch (e) {
-      lines.push(`SW registrations error: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    try {
-      const reg = await navigator.serviceWorker.register("/sw.js");
-      lines.push(`register() ok, scope=${reg.scope}`);
-      const sub = await reg.pushManager.getSubscription();
-      lines.push(`existing subscription: ${sub ? sub.endpoint : "none"}`);
-    } catch (e) {
-      lines.push(`register() error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
-    }
-    setDiag(lines.join("\n"));
-  }
-
-  async function rawRequestPermission() {
-    try {
-      const result = await Notification.requestPermission();
-      setDiag((d) => `${d}\n\n[raw requestPermission()] -> "${result}"`);
-    } catch (e) {
-      setDiag((d) => `${d}\n\n[raw requestPermission() threw] ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
-    }
-  }
 
   // The toggle's on/off state was never actually derived from anything —
   // it lived in useState with no initial read, so a reload always showed
@@ -352,37 +310,6 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
             >
               Send test notification
             </button>
-          </div>
-          <div style={{ padding: "0 16px 16px", display: "flex", flexDirection: "column", gap: "8px" }}>
-            <div className="flex gap-2">
-              <button
-                onClick={runDiagnostics}
-                style={{
-                  flex: 1, padding: "10px", borderRadius: "10px",
-                  border: "1px solid var(--border)", background: "var(--surface-1)",
-                  fontSize: "12px", fontWeight: 600, color: "var(--foreground)", cursor: "pointer",
-                }}
-              >
-                Run diagnostics
-              </button>
-              <button
-                onClick={rawRequestPermission}
-                style={{
-                  flex: 1, padding: "10px", borderRadius: "10px",
-                  border: "1px solid var(--border)", background: "var(--surface-1)",
-                  fontSize: "12px", fontWeight: 600, color: "var(--foreground)", cursor: "pointer",
-                }}
-              >
-                Raw request permission
-              </button>
-            </div>
-            {diag && (
-              <pre style={{
-                fontSize: "10px", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-all",
-                background: "var(--surface-1)", border: "1px solid var(--border)", borderRadius: "10px",
-                padding: "10px", color: "var(--foreground)", margin: 0,
-              }}>{diag}</pre>
-            )}
           </div>
         </Section>
 
