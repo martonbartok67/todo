@@ -218,7 +218,7 @@ export async function attachTimetableDeadlines(): Promise<AttachResult> {
     const safeRows = await db.select(TASK_COLUMNS_SAFE).from(tasks).where(
       and(isNull(tasks.completedAt), isNull(tasks.dueAt)),
     );
-    candidates = safeRows.map((r) => ({ ...r, deadlineSource: null, linkedEventId: null }));
+    candidates = safeRows.map((r) => ({ ...r, deadlineSource: null, linkedEventId: null, notifiedAt: null }));
   }
   result.considered = candidates.length;
 

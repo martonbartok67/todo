@@ -91,7 +91,7 @@ export async function withTaskColumnFallback(
     const rows = await safe();
     return rows.map((r) => ({
       ...r,
-      task: { ...r.task, deadlineSource: null, linkedEventId: null },
+      task: { ...r.task, deadlineSource: null, linkedEventId: null, notifiedAt: null },
     }));
   }
 }

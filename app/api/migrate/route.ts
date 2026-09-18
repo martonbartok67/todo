@@ -118,6 +118,23 @@ export async function GET(req: NextRequest) {
       }
     } catch (e) { results.push(`! timetable_events.categories: ${e}`); }
 
+    // `notified_at` — lets the notify-deadlines cron mark a task as
+    // already alerted-on so it doesn't push the same reminder every run.
+    for (const [col, ddl] of [
+      ["notified_at", "ALTER TABLE tasks ADD COLUMN notified_at TEXT"],
+    ] as [string, string][]) {
+      try {
+        const cols = await db.all(sql`SELECT name FROM pragma_table_info('tasks')`);
+        const colNames = (cols as { name: string }[]).map(c => c.name);
+        if (!colNames.includes(col)) {
+          await db.run(sql.raw(ddl));
+          results.push(`✓ added tasks.${col}`);
+        } else {
+          results.push(`- tasks.${col} already exists`);
+        }
+      } catch (e) { results.push(`! tasks.${col}: ${e}`); }
+    }
+
     // ── Deadline alignment columns on reading_items ─────────────────────
     for (const [col, ddl] of [
       ["linked_timetable_event_id", "ALTER TABLE reading_items ADD COLUMN linked_timetable_event_id INTEGER"],

@@ -54,6 +54,11 @@ export const tasks = sqliteTable("tasks", {
   deadlineSource:  text("deadline_source", { enum: ["canvas", "timetable"] }),
   // The timetable_events row this deadline was derived from, when any.
   linkedEventId:   integer("linked_event_id"),
+
+  // Set once a deadline push notification has gone out for this task, so
+  // the daily notify-deadlines cron doesn't re-alert on the same task
+  // every time it runs while the task is still within the alert window.
+  notifiedAt:      text("notified_at"),
 }, (t) => ({
   canvasSourceIdx:   uniqueIndex("tasks_canvas_source_idx").on(t.canvasId, t.sourceType),
   courseIdx:         index("tasks_course_idx").on(t.courseCanvasId),

@@ -4,6 +4,18 @@ import { useTheme } from "next-themes";
 import { saveIcalUrl, clearIcalUrl } from "@/app/actions/timetable";
 import { toast } from "sonner";
 
+// A Web Push applicationServerKey must be raw bytes, but env vars can only
+// carry text — the VAPID public key is generated URL-safe-base64, so this
+// undoes that encoding before handing it to pushManager.subscribe().
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
 type Course = { canvasId: string; name: string; code: string | null };
 type LastSync = { startedAt: string; status: string; tasksUpserted: number } | null;
 
@@ -97,20 +109,82 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   const [pushGranted, setPushGranted]   = useState<boolean | null>(null);
   const [isSubscribing, setSubscribing] = useState(false);
 
-  async function handlePushToggle() {
-    if (!("Notification" in window)) {
+  // The toggle's on/off state was never actually derived from anything —
+  // it lived in useState with no initial read, so a reload always showed
+  // "off" no matter what the user had chosen, and no subscription was
+  // ever registered with the server for the cron to push to. The Push API
+  // subscription itself IS the durable "preference" (the browser persists
+  // it), so on mount we ask the browser what's actually there instead of
+  // tracking a separate flag.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "denied") { setPushGranted(false); return; }
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    let cancelled = false;
+    navigator.serviceWorker.register("/sw.js")
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => { if (!cancelled) setPushGranted(!!sub); })
+      .catch(() => { /* unknown state — leave as null */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handlePushToggle(next: boolean) {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
       toast.error("Your browser doesn't support push notifications.");
       return;
     }
     setSubscribing(true);
     try {
-      const permission = await Notification.requestPermission();
-      setPushGranted(permission === "granted");
-      if (permission === "granted") {
-        toast.success("Notifications enabled!");
-      } else {
-        toast.error("Permission denied. Enable notifications in your browser settings.");
+      const reg = await navigator.serviceWorker.register("/sw.js");
+
+      if (!next) {
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) {
+          await fetch("/api/push", {
+            method:  "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ endpoint: existing.endpoint }),
+          });
+          await existing.unsubscribe();
+        }
+        setPushGranted(false);
+        toast.success("Notifications disabled.");
+        return;
       }
+
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushGranted(false);
+        toast.error("Permission denied. Enable notifications in your browser settings.");
+        return;
+      }
+
+      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      if (!vapidKey) {
+        toast.error("Push notifications aren't configured yet — missing VAPID key.");
+        return;
+      }
+
+      const subscription = await reg.pushManager.subscribe({
+        userVisibleOnly:      true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
+      });
+      const json = subscription.toJSON();
+      const res = await fetch("/api/push", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint:   json.endpoint,
+          keys:       json.keys,
+          userAgent:  navigator.userAgent,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save subscription");
+
+      setPushGranted(true);
+      toast.success("Notifications enabled!");
+    } catch {
+      toast.error("Couldn't update notification settings.");
     } finally {
       setSubscribing(false);
     }

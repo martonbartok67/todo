@@ -1,3 +1,5 @@
 {
-  "crons": []
+  "crons": [
+    { "path": "/api/notify-deadlines", "schedule": "0 6 * * *" }
+  ]
 }
