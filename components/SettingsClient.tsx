@@ -135,9 +135,8 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
     }
     setSubscribing(true);
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js");
-
       if (!next) {
+        const reg = await navigator.serviceWorker.register("/sw.js");
         const existing = await reg.pushManager.getSubscription();
         if (existing) {
           await fetch("/api/push", {
@@ -152,6 +151,12 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
         return;
       }
 
+      // iOS/WebKit only honors requestPermission() as a real user gesture
+      // if it's the very first await in this handler — anything awaited
+      // ahead of it (even a fast serviceWorker.register()) drops the
+      // "triggered by a tap" flag, and the prompt silently never appears.
+      // So this has to run before any other await, including registering
+      // the service worker.
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         setPushGranted(false);
@@ -165,6 +170,7 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
         return;
       }
 
+      const reg = await navigator.serviceWorker.register("/sw.js");
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly:      true,
         applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
