@@ -106,9 +106,18 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   const [isSaving, startSave]       = useTransition();
   const [isClearing, startClear]    = useTransition();
 
-  const [pushGranted, setPushGranted]   = useState<boolean | null>(null);
-  const [isSubscribing, setSubscribing] = useState(false);
-  const [diag, setDiag]                 = useState<string>("");
+  // Two separate questions, not one boolean: "has the browser granted
+  // notification permission" and "does an active push subscription exist
+  // right now." Collapsing them into a single flag was the actual bug —
+  // permission=granted plus no subscription yet (the ordinary first-time
+  // state) got misread as "blocked," disabling the switch even though
+  // tapping it would have worked fine. `hasSubscription` alone drives
+  // on/off; `permission === "denied"` alone drives the disabled/blocked
+  // state.
+  const [hasSubscription, setHasSubscription] = useState<boolean | null>(null);
+  const [permission, setPermission]           = useState<NotificationPermission | null>(null);
+  const [isSubscribing, setSubscribing]       = useState(false);
+  const [diag, setDiag]                       = useState<string>("");
 
   // Temporary diagnostic — every plausible cause of a stuck "Blocked"
   // state (stale origin permission, device restriction profile, Screen
@@ -160,12 +169,13 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
   // tracking a separate flag.
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
-    if (Notification.permission === "denied") { setPushGranted(false); return; }
+    setPermission(Notification.permission);
+    if (Notification.permission === "denied") return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
     let cancelled = false;
     navigator.serviceWorker.register("/sw.js")
       .then((reg) => reg.pushManager.getSubscription())
-      .then((sub) => { if (!cancelled) setPushGranted(!!sub); })
+      .then((sub) => { if (!cancelled) setHasSubscription(!!sub); })
       .catch(() => { /* unknown state — leave as null */ });
     return () => { cancelled = true; };
   }, []);
@@ -188,7 +198,7 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
           });
           await existing.unsubscribe();
         }
-        setPushGranted(false);
+        setHasSubscription(false);
         toast.success("Notifications disabled.");
         return;
       }
@@ -199,9 +209,9 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
       // "triggered by a tap" flag, and the prompt silently never appears.
       // So this has to run before any other await, including registering
       // the service worker.
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") {
-        setPushGranted(false);
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      if (result !== "granted") {
         toast.error("Permission denied. Enable notifications in your browser settings.");
         return;
       }
@@ -229,7 +239,7 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
       });
       if (!res.ok) throw new Error("Failed to save subscription");
 
-      setPushGranted(true);
+      setHasSubscription(true);
       toast.success("Notifications enabled!");
     } catch {
       toast.error("Couldn't update notification settings.");
@@ -299,17 +309,17 @@ export function SettingsClient({ icalUrl, icalLabel, courses, lastSync }: {
           <Row
             label="Push notifications"
             sublabel={
-              pushGranted === true
+              hasSubscription === true
                 ? "Enabled — you'll get deadline alerts"
-                : pushGranted === false
+                : permission === "denied"
                 ? "Blocked — allow in browser settings"
                 : "Get notified before deadlines"
             }
           >
             <Toggle
-              checked={pushGranted === true}
+              checked={hasSubscription === true}
               onChange={handlePushToggle}
-              disabled={isSubscribing || pushGranted === false}
+              disabled={isSubscribing || permission === "denied"}
             />
           </Row>
           <Row
