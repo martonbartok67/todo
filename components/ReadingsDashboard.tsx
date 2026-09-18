@@ -16,6 +16,32 @@ type CourseGroup = {
   lectures:       { label: string; items: ReadingItem[] }[];
 };
 
+/**
+ * The AI extractor is supposed to emit one `lectureLabel` per module (see
+ * lib/canvas/extract.ts's prompt: "Module 4: Cultural and institutional
+ * frameworks"). For some pages it instead appends the numbered subsection
+ * it's currently describing onto the module name — "Module 6: Organization
+ * and structure - 6.1 Why do we have firms?", "...- 6.2 Why is there not
+ * one large organization?", and so on — which gives every subsection its
+ * own distinct label. Grouping strictly by that label then turns one
+ * module into a dozen single-item groups instead of one group holding a
+ * dozen readings, which is what actually happened in production.
+ *
+ * This doesn't touch the stored data — readingText/detail on each row
+ * still carry the specific subsection topic (ReadingRow renders those).
+ * It only widens the grouping *key* used for display: strip a trailing
+ * " - <number>[.<number>] ..." suffix, so every subsection of the same
+ * module collapses back under one header. A label with no such
+ * numbered-subsection suffix — "Week 1", "Module 3 (wk38)", a genuine
+ * "Module 3 - Introduction" with no digit after the dash — passes through
+ * unchanged, so courses whose extraction already grouped correctly are
+ * unaffected.
+ */
+function groupKeyFor(lectureLabel: string): string {
+  const m = lectureLabel.match(/^(.*?)\s+-\s+\d+(?:\.\d+)?\b.*$/);
+  return m ? m[1].trim() : lectureLabel;
+}
+
 function groupReadings(items: ReadingItem[]): CourseGroup[] {
   const courseMap = new Map<string, CourseGroup>();
   for (const item of items) {
@@ -25,9 +51,23 @@ function groupReadings(items: ReadingItem[]): CourseGroup[] {
       });
     }
     const course = courseMap.get(item.courseCanvasId)!;
-    let lecture  = course.lectures.find((l) => l.label === item.lectureLabel);
-    if (!lecture) { lecture = { label: item.lectureLabel, items: [] }; course.lectures.push(lecture); }
+    const key    = groupKeyFor(item.lectureLabel);
+    let lecture  = course.lectures.find((l) => l.label === key);
+    if (!lecture) { lecture = { label: key, items: [] }; course.lectures.push(lecture); }
     lecture.items.push(item);
+  }
+  // Readings within a merged module group should read in subsection
+  // order, not insertion order — sort by the numeric part of the label
+  // that was stripped to form the group key (falling back to id).
+  for (const course of courseMap.values()) {
+    for (const lecture of course.lectures) {
+      lecture.items.sort((a, b) => {
+        const na = parseFloat(a.lectureLabel.match(/-\s+(\d+(?:\.\d+)?)/)?.[1] ?? "");
+        const nb = parseFloat(b.lectureLabel.match(/-\s+(\d+(?:\.\d+)?)/)?.[1] ?? "");
+        if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb;
+        return a.id - b.id;
+      });
+    }
   }
   return Array.from(courseMap.values());
 }
